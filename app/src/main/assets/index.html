@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="hi" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Rang Studio – हर वीडियो में रंग!</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap"
+    />
+    <link rel="stylesheet" href="hark.css" />
+    <link rel="stylesheet" href="hark-hero.css" />
+    <style>
+      :root { --x-grad: linear-gradient(120deg, #8b5cf6, #3b82f6 50%, #ec4899); }
+      body { background: var(--fill-primary-on); color: var(--text-primary); }
+      .x-app { max-width: 480px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; padding: 12px var(--gutter) 24px; gap: 16px; }
+      .x-top { display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 5; padding: 8px 0; background: var(--fill-primary-on); }
+      .x-top img { width: 44px; height: 44px; border-radius: var(--r-s); object-fit: cover; }
+      .x-top h1 { font: var(--type-heading); margin: 0; color: var(--text-primary); border-bottom: 3px solid transparent; border-image: var(--x-grad) 1; display: inline-block; }
+      .x-top p { font: var(--type-caption); color: var(--text-secondary); margin: 0; }
+      .x-back { margin-left: auto; min-width: var(--tap); min-height: var(--tap); border-radius: var(--r-pill); border: 1px solid var(--stroke-primary); background: var(--fill-tertiary); color: var(--text-primary); font: var(--type-label); padding: 0 16px; cursor: pointer; }
+      .x-screen { display: none; flex-direction: column; gap: 14px; }
+      .x-screen.is-on { display: flex; }
+      .x-card { display: flex; align-items: center; gap: 16px; width: 100%; text-align: left; padding: 20px; border-radius: var(--r-l); border: 1px solid var(--stroke-secondary); background: var(--fill-tertiary); color: var(--text-primary); font: var(--type-heading); cursor: pointer; min-height: 88px; }
+      .x-card small { display: block; font: var(--type-small); color: var(--text-secondary); margin-top: 4px; }
+      .x-card i { flex: none; width: 52px; height: 52px; border-radius: var(--r-m); background: var(--x-grad); display: grid; place-items: center; font-style: normal; font-size: 24px; }
+      .x-card:disabled { opacity: .55; cursor: not-allowed; }
+      .x-btn { min-height: 52px; border: 0; border-radius: var(--r-pill); background: var(--x-grad); color: #fff; font: var(--type-body); font-weight: var(--weight-bold); padding: 0 22px; cursor: pointer; flex: 1; }
+      .x-btn--ghost { background: var(--fill-tertiary); color: var(--text-primary); border: 1px solid var(--stroke-primary); }
+      .x-btn:disabled { opacity: .5; cursor: wait; }
+      .x-row { display: flex; gap: 10px; flex-wrap: wrap; }
+      .x-field { display: flex; flex-direction: column; gap: 6px; font: var(--type-label); }
+      .x-field span { color: var(--text-secondary); }
+      .x-field select, .x-field input[type=text] { min-height: var(--tap); border-radius: var(--r-s); border: 1px solid var(--stroke-primary); background: var(--fill-tertiary); color: var(--text-primary); font: var(--type-body); padding: 0 12px; }
+      .x-field input[type=range] { width: 100%; min-height: var(--tap); accent-color: #8b5cf6; }
+      .x-file { display: flex; align-items: center; justify-content: center; min-height: 64px; border: 1.5px dashed var(--stroke-primary); border-radius: var(--r-m); font: var(--type-body); cursor: pointer; text-align: center; padding: 8px; }
+      .x-file input { display: none; }
+      .x-stage { width: 100%; max-height: 58vh; object-fit: contain; border-radius: var(--r-m); background: #000; display: block; }
+      .x-portrait { aspect-ratio: 9 / 16; }
+      .x-status { font: var(--type-small); color: var(--text-secondary); min-height: 1.4em; margin: 0; }
+      .x-result { display: none; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--r-m); background: var(--fill-tertiary); }
+      .x-result.is-on { display: flex; }
+      .x-result video, .x-result audio { width: 100%; border-radius: var(--r-s); max-height: 50vh; background: #000; }
+      .x-result a { text-align: center; text-decoration: none; display: flex; align-items: center; justify-content: center; }
+      .x-check { display: flex; align-items: center; gap: 10px; min-height: var(--tap); font: var(--type-body); }
+      .x-check input { width: 22px; height: 22px; accent-color: #ec4899; }
+      .x-rec { width: 120px; height: 120px; border-radius: 50%; border: 0; margin: 12px auto; background: var(--x-grad); color: #fff; font: var(--type-heading); cursor: pointer; }
+      .x-rec.is-live { animation: x-pulse 1s infinite; }
+      @keyframes x-pulse { 50% { transform: scale(.94); opacity: .8; } }
+      .x-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; transition: all var(--dur-quick) var(--ease-out); background: var(--fill-primary); color: var(--text-primary-on); font: var(--type-label); padding: 12px 18px; border-radius: var(--r-pill); max-width: 90vw; text-align: center; z-index: 20; pointer-events: none; }
+      .x-toast.is-on { opacity: 1; transform: translate(-50%, 0); }
+      .x-foot { margin-top: auto; text-align: center; font: var(--type-caption); color: var(--text-secondary); padding-top: 16px; }
+      .x-foot a { color: inherit; display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="page" id="top">
+      <div class="x-app">
+        <header class="x-top">
+          <img src="logo.png" alt="Rang Studio लोगो" />
+          <div><h1>Rang Studio</h1><p>हर वीडियो में रंग!</p></div>
+          <button class="x-back" id="back" hidden>← वापस</button>
+        </header>
+
+        <section class="x-screen is-on" id="home">
+          <button class="x-card" data-go="photo"><i>🖼️</i><div>फोटो से वीडियो<small>फोटो चुनें, मोशन जोड़ें, वीडियो बनाएं</small></div></button>
+          <button class="x-card" data-go="edit"><i>🎬</i><div>वीडियो एडिट<small>ट्रिम, फिल्टर, टेक्स्ट, म्यूट</small></div></button>
+          <button class="x-card" data-go="voice"><i>🎙️</i><div>वॉइसओवर<small>आवाज़ रिकॉर्ड या अपलोड करें</small></div></button>
+          <button class="x-card" disabled><i>✨</i><div>AI वीडियो<small><span class="chip">जल्द आ रहा है</span></small></div></button>
+          <p class="x-status" id="voiceInfo">कोई वॉइसओवर नहीं जुड़ा</p>
+        </section>
+
+        <section class="x-screen" id="photo">
+          <label class="x-file"><input type="file" id="pFiles" accept="image/*" multiple /><span id="pCount">📷 फोटो चुनें (एक से ज़्यादा)</span></label>
+          <label class="x-field"><span>मोशन</span>
+            <select id="pMotion"><option value="in">ज़ूम इन</option><option value="out">ज़ूम आउट</option><option value="pan">पैन</option><option value="shake">हिलाना</option></select>
+          </label>
+          <label class="x-field"><span>हर फोटो: <b id="pSecV">3</b> सेकंड</span><input type="range" id="pSec" min="1" max="6" step="1" value="3" /></label>
+          <label class="x-field"><span>टेक्स्ट (वैकल्पिक)</span><input type="text" id="pText" placeholder="जैसे: जन्मदिन मुबारक!" /></label>
+          <canvas class="x-stage x-portrait" id="pCanvas" width="720" height="1280"></canvas>
+          <div class="x-row"><button class="x-btn x-btn--ghost" id="pPlay">▶ प्ले</button><button class="x-btn" id="pExport">⬇ एक्सपोर्ट</button></div>
+          <p class="x-status" id="pStatus"></p>
+          <div class="x-result" id="pResult"></div>
+        </section>
+
+        <section class="x-screen" id="edit">
+          <label class="x-file"><input type="file" id="vFile" accept="video/*" /><span id="vName">🎞️ वीडियो चुनें</span></label>
+          <canvas class="x-stage" id="vCanvas" width="720" height="1280"></canvas>
+          <video id="vEl" playsinline hidden></video>
+          <label class="x-field"><span>शुरू: <b id="vStartV">0.0</b> सेकंड</span><input type="range" id="vStart" min="0" max="0" step="0.1" value="0" /></label>
+          <label class="x-field"><span>अंत: <b id="vEndV">0.0</b> सेकंड</span><input type="range" id="vEnd" min="0" max="0" step="0.1" value="0" /></label>
+          <label class="x-field"><span>फिल्टर</span>
+            <select id="vFilter"><option value="none">नॉर्मल</option><option value="brightness(1.3) contrast(1.05)">ब्राइट</option><option value="grayscale(1)">ब्लैक एंड व्हाइट</option><option value="sepia(.6) contrast(1.1) brightness(.95)">विंटेज</option><option value="saturate(1.9) contrast(1.1)">रंगीन</option></select>
+          </label>
+          <label class="x-field"><span>टेक्स्ट (वैकल्पिक)</span><input type="text" id="vText" placeholder="वीडियो पर लिखें" /></label>
+          <label class="x-check"><input type="checkbox" id="vMute" /> वीडियो की आवाज़ बंद (म्यूट)</label>
+          <div class="x-row"><button class="x-btn x-btn--ghost" id="vPlay">▶ प्ले</button><button class="x-btn" id="vExport">⬇ एक्सपोर्ट</button></div>
+          <p class="x-status" id="vStatus"></p>
+          <div class="x-result" id="vResult"></div>
+        </section>
+
+        <section class="x-screen" id="voice">
+          <button class="x-rec" id="recBtn">● रिकॉर्ड</button>
+          <p class="x-status" id="recStatus" style="text-align:center">बटन दबाकर बोलना शुरू करें</p>
+          <label class="x-file"><input type="file" id="aFile" accept="audio/*" /><span>🎵 या ऑडियो फ़ाइल अपलोड करें</span></label>
+          <div class="x-result" id="aResult"><audio id="aEl" controls></audio><button class="x-btn x-btn--ghost" id="aClear">🗑 वॉइसओवर हटाएं</button></div>
+          <p class="fineprint">यह आवाज़ फोटो वीडियो और एडिट किए वीडियो, दोनों के एक्सपोर्ट में जुड़ जाएगी।</p>
+        </section>
+
+        <footer class="x-foot">PlayRang परिवार • <a href="https://rangstore.pages.dev/store/" target="_blank" rel="noopener">rangstore.pages.dev/store/</a></footer>
+      </div>
+      <div class="x-toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script src="hark.js"></script>
+    <script>
+      (function () {
+        var $ = function (id) { return document.getElementById(id); };
+        var voiceBlob = null, AC = null, busy = false, tt;
+        function toast(m) { var t = $("toast"); t.textContent = m; t.classList.add("is-on"); clearTimeout(tt); tt = setTimeout(function () { t.classList.remove("is-on"); }, 3200); }
+        function ac() { if (!AC) { var C = window.AudioContext || window.webkitAudioContext; if (C) AC = new C(); } if (AC && AC.state === "suspended") AC.resume(); return AC; }
+
+        /* ---------- screens ---------- */
+        var stopPreview = function () {};
+        function go(id) {
+          stopPreview();
+          document.querySelectorAll(".x-screen").forEach(function (s) { s.classList.toggle("is-on", s.id === id); });
+          $("back").hidden = id === "home"; window.scrollTo(0, 0);
+        }
+        document.querySelectorAll("[data-go]").forEach(function (b) { b.onclick = function () { go(b.dataset.go); }; });
+        $("back").onclick = function () { go("home"); };
+
+        /* ---------- shared drawing + export ---------- */
+        function drawText(ctx, text, W, H) {
+          if (!text) return;
+          var fs = Math.round(W * 0.075);
+          ctx.font = "600 " + fs + "px Geist, 'Noto Sans Devanagari', sans-serif";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          var w = Math.min(ctx.measureText(text).width + fs, W * 0.94), y = H * 0.84;
+          ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect((W - w) / 2, y - fs * 0.85, w, fs * 1.7);
+          ctx.fillStyle = "#fff"; ctx.fillText(text, W / 2, y, W * 0.9);
+        }
+        function pickMime() {
+          if (!window.MediaRecorder) return null;
+          var list = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+          for (var i = 0; i < list.length; i++) if (MediaRecorder.isTypeSupported(list[i])) return list[i];
+          return "";
+        }
+        function voiceBuffer() {
+          if (!voiceBlob || !ac()) return Promise.resolve(null);
+          return voiceBlob.arrayBuffer().then(function (b) { return new Promise(function (ok) { AC.decodeAudioData(b, ok, function () { ok(null); }); }); });
+        }
+        /* opts: canvas, status, result, name, setup(dest) -> Promise, run(done) */
+        function exportVideo(o) {
+          if (busy) return toast("एक्सपोर्ट पहले से चल रहा है, थोड़ा रुकें 🙏");
+          var mime = pickMime();
+          if (mime === null || !o.canvas.captureStream) return toast("माफ़ कीजिए, यह ब्राउज़र वीडियो एक्सपोर्ट नहीं कर सकता 😔");
+          busy = true; stopPreview(); o.btn.disabled = true; o.status.textContent = "तैयारी हो रही है…";
+          var stream = o.canvas.captureStream(30), dest = ac() ? AC.createMediaStreamDestination() : null;
+          voiceBuffer().then(function (buf) {
+            var srcs = [];
+            if (dest) {
+              if (buf) { var s = AC.createBufferSource(); s.buffer = buf; s.connect(dest); srcs.push(s); }
+              if (o.audio) o.audio(dest);
+              dest.stream.getAudioTracks().forEach(function (t) { stream.addTrack(t); });
+            }
+            var chunks = [], rec;
+            try { rec = new MediaRecorder(stream, mime ? { mimeType: mime } : {}); } catch (e) { rec = new MediaRecorder(stream); }
+            rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+            rec.onstop = function () {
+              srcs.forEach(function (s) { try { s.stop(); } catch (e) {} });
+              var type = (rec.mimeType || mime || "video/webm").split(";")[0], blob = new Blob(chunks, { type: type });
+              var url = URL.createObjectURL(blob), ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";
+              o.result.innerHTML = '<video controls playsinline src="' + url + '"></video><a class="x-btn" download="' + o.name + "." + ext + '" href="' + url + '">⬇ वीडियो डाउनलोड करें (' + ext.toUpperCase() + ")</a>";
+              o.result.classList.add("is-on"); o.status.textContent = "तैयार! ✅ " + (blob.size / 1048576).toFixed(1) + " MB";
+              busy = false; o.btn.disabled = false; toast("वीडियो तैयार है 🎉");
+            };
+            rec.start(250); srcs.forEach(function (s) { s.start(); });
+            o.run(function (p) { o.status.textContent = "एक्सपोर्ट हो रहा है… " + Math.min(100, Math.round(p * 100)) + "%"; }, function () { setTimeout(function () { rec.stop(); }, 150); });
+          }).catch(function () { busy = false; o.btn.disabled = false; o.status.textContent = ""; toast("कुछ गड़बड़ हो गई, दोबारा कोशिश करें 🙏"); });
+        }
+
+        /* ---------- photo to video ---------- */
+        var pc = $("pCanvas"), px = pc.getContext("2d"), imgs = [];
+        function sec() { return +$("pSec").value; }
+        function drawPhoto(t) {
+          var W = 720, H = 1280, n = imgs.length; px.fillStyle = "#000"; px.fillRect(0, 0, W, H);
+          if (!n) { px.fillStyle = "#888"; px.font = "500 40px Geist, sans-serif"; px.textAlign = "center"; px.fillText("फोटो चुनें", W / 2, H / 2); return; }
+          var s = sec(), i = Math.min(n - 1, Math.floor(t / s)), p = (t - i * s) / s, img = imgs[i], m = $("pMotion").value;
+          var sc = 1, dx = 0, dy = 0;
+          if (m === "in") sc = 1 + 0.2 * p; else if (m === "out") sc = 1.2 - 0.2 * p;
+          else if (m === "pan") { sc = 1.2; dx = (i % 2 ? 1 : -1) * (p - 0.5) * W * 0.18; }
+          else { sc = 1.1; dx = Math.sin(t * 38) * 14; dy = Math.cos(t * 31) * 14; }
+          var k = Math.max(W / img.width, H / img.height) * sc, w = img.width * k, h = img.height * k;
+          px.globalAlpha = Math.min(1, (t - i * s) / 0.35); px.drawImage(img, (W - w) / 2 + dx, (H - h) / 2 + dy, w, h); px.globalAlpha = 1;
+          drawText(px, $("pText").value.trim(), W, H);
+        }
+        function animate(total, draw, onTick, onEnd) {
+          var t0 = performance.now(), live = true, raf;
+          (function f() { if (!live) return; var t = (performance.now() - t0) / 1000; if (t >= total) { draw(total - 0.001); live = false; return onEnd && onEnd(); } draw(t); onTick && onTick(t / total); raf = requestAnimationFrame(f); })();
+          return function () { live = false; cancelAnimationFrame(raf); };
+        }
+        $("pFiles").onchange = function () {
+          var files = [].slice.call(this.files).filter(function (f) { return /^image\//.test(f.type); });
+          if (!files.length) return toast("कृपया फोटो फ़ाइलें चुनें 📷");
+          Promise.all(files.map(function (f) { return new Promise(function (ok) { var im = new Image(); im.onload = function () { ok(im); }; im.onerror = function () { ok(null); }; im.src = URL.createObjectURL(f); }); }))
+            .then(function (list) { imgs = list.filter(Boolean); $("pCount").textContent = "📷 " + imgs.length + " फोटो चुनी गईं · बदलने के लिए टैप करें"; if (imgs.length < list.length) toast("कुछ फोटो खुल नहीं पाईं"); drawPhoto(0); });
+        };
+        $("pSec").oninput = function () { $("pSecV").textContent = this.value; };
+        ["pMotion", "pText"].forEach(function (id) { $(id).addEventListener("input", function () { if (!busy) drawPhoto(0); }); });
+        $("pPlay").onclick = function () {
+          if (!imgs.length) return toast("पहले फोटो चुनें 📷");
+          stopPreview(); stopPreview = animate(imgs.length * sec(), drawPhoto, null, function () { stopPreview = function () {}; });
+        };
+        $("pExport").onclick = function () {
+          if (!imgs.length) return toast("पहले फोटो चुनें 📷");
+          var total = imgs.length * sec();
+          exportVideo({ canvas: pc, btn: this, status: $("pStatus"), result: $("pResult"), name: "rang-studio-photo",
+            run: function (tick, done) { animate(total, drawPhoto, tick, done); } });
+        };
+        drawPhoto(0);
+
+        /* ---------- video edit ---------- */
+        var vc = $("vCanvas"), vx = vc.getContext("2d"), v = $("vEl"), vSrc = null, vGain = null, vLoop = null;
+        function trim() { return [+$("vStart").value, +$("vEnd").value]; }
+        function drawVideo() {
+          vx.filter = $("vFilter").value; vx.drawImage(v, 0, 0, vc.width, vc.height); vx.filter = "none";
+          drawText(vx, $("vText").value.trim(), vc.width, vc.height);
+        }
+        function stopVideo() { if (vLoop) cancelAnimationFrame(vLoop); vLoop = null; v.pause(); }
+        function playRange(onTick, onEnd) {
+          var r = trim(); stopVideo();
+          v.currentTime = r[0];
+          v.onseeked = function () {
+            v.onseeked = null;
+            v.play().then(function () {
+              (function f() { drawVideo(); onTick && onTick((v.currentTime - r[0]) / (r[1] - r[0]));
+                if (v.currentTime >= r[1] || v.ended) { stopVideo(); return onEnd && onEnd(); } vLoop = requestAnimationFrame(f); })();
+            }).catch(function () { toast("वीडियो चल नहीं पाया 😔"); onEnd && onEnd(); });
+          };
+        }
+        $("vFile").onchange = function () {
+          var f = this.files[0]; if (!f) return;
+          stopVideo(); v.src = URL.createObjectURL(f); $("vName").textContent = "🎞️ " + f.name;
+        };
+        v.onerror = function () { toast("यह वीडियो फ़ाइल खुल नहीं पाई 😔"); };
+        v.onloadedmetadata = function () {
+          var k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+          vc.width = Math.round(v.videoWidth * k / 2) * 2; vc.height = Math.round(v.videoHeight * k / 2) * 2;
+          var d = Math.floor(v.duration * 10) / 10;
+          ["vStart", "vEnd"].forEach(function (id) { $(id).max = d; });
+          $("vStart").value = 0; $("vEnd").value = d; syncTrim();
+          v.currentTime = 0.05; v.onseeked = function () { v.onseeked = null; drawVideo(); };
+        };
+        function syncTrim(e) {
+          var s = $("vStart"), en = $("vEnd");
+          if (+s.value > +en.value - 0.5) { if (e && e.target === s) s.value = Math.max(0, +en.value - 0.5); else en.value = Math.min(+en.max, +s.value + 0.5); }
+          $("vStartV").textContent = (+s.value).toFixed(1); $("vEndV").textContent = (+en.value).toFixed(1);
+        }
+        ["vStart", "vEnd"].forEach(function (id) { $(id).addEventListener("input", function (e) { syncTrim(e); if (v.readyState >= 2 && !busy) { stopVideo(); v.currentTime = +this.value; v.onseeked = function () { v.onseeked = null; drawVideo(); }; } }); });
+        ["vFilter", "vText"].forEach(function (id) { $(id).addEventListener("input", function () { if (v.readyState >= 2 && !vLoop) drawVideo(); }); });
+        $("vMute").onchange = function () { v.muted = this.checked && !vSrc; if (vGain) vGain.gain.value = this.checked ? 0 : 1; };
+        $("vPlay").onclick = function () {
+          if (!v.src || v.readyState < 1) return toast("पहले वीडियो चुनें 🎞️");
+          stopPreview(); stopPreview = stopVideo; playRange();
+        };
+        $("vExport").onclick = function () {
+          if (!v.src || v.readyState < 1) return toast("पहले वीडियो चुनें 🎞️");
+          var mute = $("vMute").checked;
+          exportVideo({ canvas: vc, btn: this, status: $("vStatus"), result: $("vResult"), name: "rang-studio-edit",
+            audio: function (dest) {
+              try {
+                if (!vSrc) { vSrc = AC.createMediaElementSource(v); vGain = AC.createGain(); vSrc.connect(vGain); vGain.connect(AC.destination); }
+                v.muted = false; vGain.gain.value = mute ? 0 : 1; vGain.connect(dest);
+                v._dest = dest;
+              } catch (e) { toast("वीडियो की आवाज़ नहीं जुड़ पाई, बिना आवाज़ एक्सपोर्ट होगा"); }
+            },
+            run: function (tick, done) { playRange(tick, function () { if (vGain && v._dest) { try { vGain.disconnect(v._dest); } catch (e) {} } done(); }); } });
+        };
+
+        /* ---------- voiceover ---------- */
+        var mr = null, micStream = null;
+        function setVoice(blob, label) {
+          voiceBlob = blob; var a = $("aEl");
+          if (blob) { a.src = URL.createObjectURL(blob); $("aResult").classList.add("is-on"); $("voiceInfo").textContent = "🎙️ वॉइसओवर जुड़ा: " + label; }
+          else { a.removeAttribute("src"); $("aResult").classList.remove("is-on"); $("voiceInfo").textContent = "कोई वॉइसओवर नहीं जुड़ा"; }
+        }
+        $("recBtn").onclick = function () {
+          var b = this;
+          if (mr && mr.state === "recording") { mr.stop(); return; }
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) return toast("इस ब्राउज़र में रिकॉर्डिंग नहीं हो सकती, ऑडियो फ़ाइल अपलोड करें 🎵");
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(function (st) {
+            micStream = st; var chunks = [], t0 = Date.now(), tm;
+            mr = new MediaRecorder(st);
+            mr.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+            mr.onstop = function () {
+              clearInterval(tm); st.getTracks().forEach(function (t) { t.stop(); });
+              b.classList.remove("is-live"); b.textContent = "● रिकॉर्ड";
+              $("recStatus").textContent = "रिकॉर्डिंग पूरी ✅ नीचे सुनें";
+              setVoice(new Blob(chunks, { type: mr.mimeType || "audio/webm" }), "रिकॉर्डिंग"); toast("वॉइसओवर सेव हो गया 🎉");
+            };
+            mr.start(); b.classList.add("is-live"); b.textContent = "■ रोकें";
+            tm = setInterval(function () { $("recStatus").textContent = "रिकॉर्ड हो रहा है… " + Math.round((Date.now() - t0) / 1000) + " सेकंड"; }, 300);
+          }).catch(function () {
+            $("recStatus").textContent = "माइक की अनुमति नहीं मिली";
+            toast("माइक ब्लॉक है 🎙️ अनुमति दें या ऑडियो फ़ाइल अपलोड करें");
+          });
+        };
+        $("aFile").onchange = function () {
+          var f = this.files[0]; if (!f) return;
+          if (!/^audio\//.test(f.type)) return toast("कृपया ऑडियो फ़ाइल चुनें 🎵");
+          setVoice(f, f.name); toast("ऑडियो जुड़ गया 🎵");
+        };
+        $("aClear").onclick = function () { setVoice(null); $("aFile").value = ""; toast("वॉइसओवर हटा दिया"); };
+      })();
+    </script>
+  </body>
+</html>
