@@ -80,7 +80,7 @@ public class SettingsActivity extends Activity {
         TextView name = text("मित्र (Mitra)", 22, Ui.TEXT, true);
         name.setGravity(Gravity.CENTER);
         about.addView(name);
-        String ver = "2.0";
+        String ver = "2.1";
         try {
             PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             ver = pi.versionName + " (" + pi.versionCode + ")";
@@ -97,6 +97,33 @@ public class SettingsActivity extends Activity {
         desc.setPadding(0, dp(6), 0, 0);
         about.addView(desc);
 
+        // Language
+        LinearLayout lc = card();
+        lc.addView(text("भाषा चुनें / Language", 16, Ui.TEXT, true));
+        lc.addView(text("मित्र आपकी भाषा में सुनेगा और जवाब देगा। \"अपने-आप\" में जिस भाषा में आप लिखें/बोलें, उसी में जवाब मिलेगा "
+                + "(बोलकर पूछने के लिए हिंदी पहचान)। भोजपुरी, मैथिली, मगही, हरियाणवी के लिए हिंदी आवाज़-पहचान इस्तेमाल होती है।", 13f, Ui.MUTED, false));
+        final TextView cur = button("🌐  " + Lang.get(prefs.getString("lang", "auto")).label, false);
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ll.topMargin = dp(10);
+        lc.addView(cur, ll);
+        cur.setOnClickListener(x -> {
+            String[] labels = new String[Lang.ALL.length];
+            int sel = 0;
+            String now = prefs.getString("lang", "auto");
+            for (int i = 0; i < Lang.ALL.length; i++) { labels[i] = Lang.ALL[i].label; if (Lang.ALL[i].id.equals(now)) sel = i; }
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("भाषा चुनें")
+                    .setSingleChoiceItems(labels, sel, (d, which) -> {
+                        Lang l = Lang.ALL[which];
+                        prefs.edit().putString("lang", l.id).apply();
+                        cur.setText("🌐  " + l.label);
+                        Toast.makeText(this, l.label + " ✅", Toast.LENGTH_SHORT).show();
+                        d.dismiss();
+                    })
+                    .setNegativeButton("रद्द करें", null)
+                    .show();
+        });
+
         // Voice
         LinearLayout voice = card();
         voice.addView(text("आवाज़", 16, Ui.TEXT, true));
@@ -108,7 +135,7 @@ public class SettingsActivity extends Activity {
         speak.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> prefs.edit().putBoolean("muted", !on).apply());
         speak.setPadding(0, dp(8), 0, dp(4));
         voice.addView(speak);
-        TextView ttsHelp = link("हिंदी आवाज़ ठीक नहीं? फ़ोन की Text-to-speech सेटिंग खोलें");
+        TextView ttsHelp = link("आवाज़ ठीक नहीं या आपकी भाषा की आवाज़ नहीं? Text-to-speech सेटिंग खोलें और Google TTS में अपनी भाषा की voice डाउनलोड करें");
         ttsHelp.setOnClickListener(x -> {
             try { startActivity(new Intent("com.android.settings.TTS_SETTINGS")); }
             catch (Exception e) { Toast.makeText(this, "यह सेटिंग नहीं खुल पाई", Toast.LENGTH_SHORT).show(); }
@@ -172,7 +199,7 @@ public class SettingsActivity extends Activity {
         LinearLayout priv = card();
         priv.addView(text("निजता / Privacy", 16, Ui.TEXT, true));
         priv.addView(text("माइक की आवाज़ सिर्फ़ बोले गए शब्दों को टेक्स्ट में बदलने के लिए इस्तेमाल होती है। आपके सवाल जवाब पाने के लिए AI सेवा को भेजे जाते हैं। "
-                + "हम अपने किसी सर्वर पर आपकी बातचीत नहीं रखते।", 13.5f, Ui.MUTED, false));
+                + "हम अपने किसी सर्वर पर आपकी बातचीत नहीं रखते। नाम से कॉल/मैसेज के लिए कॉन्टैक्ट्स सिर्फ़ फ़ोन पर पढ़े जाते हैं — न अपलोड होते हैं, न AI को भेजे जाते हैं।", 13.5f, Ui.MUTED, false));
         TextView pp = link("प्राइवेसी पॉलिसी पढ़ें / Privacy Policy");
         pp.setOnClickListener(x -> open(PRIVACY_URL));
         priv.addView(pp);

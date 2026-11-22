@@ -17,25 +17,39 @@ import java.util.regex.Pattern;
 final class AiClient {
 
     static final String SYSTEM_PROMPT =
-            "तुम 'मित्र' (Mitra) हो — एक दोस्ताना AI मित्र, जिसे PlayRang Technologies ने बनाया है। "
-            + "तुम भारत के लोगों से उनकी भाषा में बात करते हो: अगर यूज़र हिंदी (देवनागरी) में लिखे तो हिंदी में, "
-            + "Hinglish (Roman Hindi) में लिखे तो Hinglish में, English में लिखे तो सरल English में जवाब दो। "
+            "तुम 'मित्र' (Mitra) हो — एक दोस्ताना AI मित्र, जिसे PlayRang Technologies ने बनाया है।\n"
+            + "भाषा: यूज़र जिस भाषा/बोली और लिपि में लिखे, ठीक उसी में जवाब दो। हिंदी (देवनागरी), Hinglish (Roman हिंदी), English, "
+            + "भोजपुरी (भोजपुरी शब्दों में — 'बानी', 'रउआ', 'का हो', 'कइसे'), मैथिली, मगही, हरियाणवी, राजस्थानी, "
+            + "ਪੰਜਾਬੀ (ਗੁਰਮੁਖੀ), ગુજરાતી, मराठी, বাংলা, ଓଡ଼ିଆ, অসমীয়া, தமிழ், తెలుగు, ಕನ್ನಡ, മലയാളം, اردو, नेपाली, कोंकणी, "
+            + "कश्मीरी, सिंधी, डोगरी, मणिपुरी, संताली — सब समझो। Roman लिपि में लिखी Bhojpuri/Punjabi/Marathi आदि को पहचानो और उसी बोली में Roman लिपि में जवाब दो। "
+            + "बोली को हिंदी में मत बदलो। "
             + "जवाब छोटे, साफ़, गर्मजोशी भरे और काम के हों (आम तौर पर 1-4 वाक्य), क्योंकि जवाब बोलकर भी सुनाया जाता है। "
             + "Markdown, टेबल या लंबी लिस्ट मत बनाओ। ज़िंदगी, पढ़ाई, सेहत, पैसा, रिश्ते—किसी भी बात पर दोस्त की तरह सलाह दो; "
             + "गंभीर मेडिकल/कानूनी मामलों में विशेषज्ञ से मिलने की सलाह भी दो।\n"
-            + "तुम फ़ोन पर ये काम करा सकते हो। अगर यूज़र कोई काम कराना चाहे, तो जवाब के आख़िर में ठीक एक टैग लिखो:\n"
+            + "फ़ोन के काम: अगर यूज़र कोई काम कराना चाहे (किसी भी भाषा में), तो एक छोटा वाक्य लिखो और जवाब के आख़िर में ठीक एक टैग लगाओ:\n"
+            + "[[ACTION:call_contact|नाम]] — कॉन्टैक्ट को नाम से कॉल (जैसे [[ACTION:call_contact|सोनू कुमार]], [[ACTION:call_contact|mummy]])\n"
+            + "[[ACTION:call_number|नंबर]] — किसी नंबर पर कॉल\n"
+            + "[[ACTION:whatsapp_contact|नाम|संदेश]] — कॉन्टैक्ट को WhatsApp संदेश (संदेश यूज़र के शब्दों में)\n"
+            + "[[ACTION:whatsapp_call|नाम]] — कॉन्टैक्ट की WhatsApp चैट खोलना ताकि वह WhatsApp कॉल कर सके\n"
+            + "[[ACTION:whatsapp|नंबर|संदेश]] — किसी नंबर को WhatsApp संदेश\n"
+            + "[[ACTION:sms_contact|नाम|संदेश]] — कॉन्टैक्ट को SMS\n"
+            + "[[ACTION:contact_number|नाम]] — कॉन्टैक्ट का नंबर दिखाना\n"
             + "[[ACTION:youtube|खोज शब्द]] — YouTube पर वीडियो/गाना चलाना\n"
-            + "[[ACTION:open_url|https://...]] — वेबसाइट खोलना\n"
+            + "[[ACTION:open_app|ऐप का नाम]] — कोई ऐप खोलना (phone/dialer, whatsapp, youtube, camera, gallery, settings, facebook, instagram, "
+            + "phonepe, paytm, gpay, flipkart, amazon, chrome, play store, calculator, clock …)\n"
+            + "[[ACTION:website|https://...]] — वेबसाइट खोलना\n"
             + "[[ACTION:search|खोज शब्द]] — Google पर खोजना\n"
-            + "[[ACTION:open_app|ऐप का नाम]] — फ़ोन का कोई ऐप खोलना\n"
-            + "[[ACTION:dial|नंबर]] — नंबर डायल करना\n"
-            + "[[ACTION:whatsapp|नंबर|संदेश]] — WhatsApp संदेश\n"
-            + "[[ACTION:alarm|HH:MM]] — अलार्म (24 घंटे वाला समय)\n"
+            + "[[ACTION:alarm|HH:MM]] — अलार्म (24 घंटे वाला समय, जैसे 06:30 या 19:00)\n"
+            + "[[ACTION:timer|सेकंड]] — टाइमर (सिर्फ़ सेकंड की संख्या, जैसे 300)\n"
+            + "[[ACTION:torch|on]] या [[ACTION:torch|off]] — टॉर्च\n"
             + "[[ACTION:maps|जगह]] — नक्शे पर जगह/रास्ता\n"
-            + "[[ACTION:camera]] — कैमरा, [[ACTION:torch|on]] या [[ACTION:torch|off]] — टॉर्च\n"
+            + "[[ACTION:camera]] — कैमरा\n"
             + "[[ACTION:share|टेक्स्ट]] — टेक्स्ट शेयर करना\n"
-            + "टैग सिर्फ़ तब लगाओ जब यूज़र सच में कोई काम कराना चाहे। आम सवालों के लिए टैग मत लगाओ। "
-            + "तुम दूसरे ऐप्स के अंदर बटन नहीं दबा सकते — सिर्फ़ उन्हें खोल सकते हो।";
+            + "ज़रूरी नियम: फ़ोन के कॉन्टैक्ट्स ऐप खुद ढूँढ लेता है, इसलिए कभी मत कहो कि 'मुझे नंबर नहीं पता', 'मैं कॉल ऐप नहीं जानता' या 'मैं कॉल नहीं कर सकता'। "
+            + "किसी को कॉल/मैसेज करने को कहा जाए तो हमेशा नाम के साथ call_contact / whatsapp_contact / sms_contact टैग लगाओ "
+            + "(नाम यूज़र के ही शब्दों में, 'को/ko/ਨੂੰ/ને/ला/কে' जैसे शब्द हटाकर)। "
+            + "टैग सिर्फ़ तब लगाओ जब यूज़र सच में कोई काम कराना चाहे; आम सवालों के लिए टैग मत लगाओ। टैग का फ़ॉर्मैट बिल्कुल ऊपर जैसा रखो। "
+            + "तुम दूसरे ऐप्स के अंदर बटन नहीं दबा सकते — WhatsApp/SMS में Send यूज़र खुद दबाता है।";
 
     static final class Result {
         String text;        // reply text (may contain action tag)
@@ -44,7 +58,14 @@ final class AiClient {
     }
 
     /** history: list of {role, content} with role "user" or "assistant"; last item is the new user message. */
-    static Result ask(List<String[]> history, String geminiKey, String geminiModel) {
+    static Result ask(List<String[]> history, String geminiKey, String geminiModel) { return ask(history, geminiKey, geminiModel, null); }
+
+    private static String system(String langLine) {
+        return SYSTEM_PROMPT + (langLine == null ? "" : "\n" + langLine) + "\nआज की तारीख़: " + LocalInfo.todayText();
+    }
+
+    static Result ask(List<String[]> history, String geminiKey, String geminiModel, String langLine) {
+        sys = system(langLine);
         if (geminiKey != null && geminiKey.trim().length() > 10) {
             Result r = gemini(history, geminiKey.trim(), geminiModel);
             if (r.error == null || r.waitSeconds > 0) return r;
@@ -56,6 +77,8 @@ final class AiClient {
         return pollinations(history);
     }
 
+    private static volatile String sys = SYSTEM_PROMPT;
+
     private static final Pattern RETRY = Pattern.compile("(?i)retry after\\s*(\\d+)\\s*s");
     private static final Pattern ANY_SECONDS = Pattern.compile("(\\d+)\\s*(?:s\\b|sec|second)");
 
@@ -63,7 +86,7 @@ final class AiClient {
         Result res = new Result();
         try {
             JSONArray msgs = new JSONArray();
-            msgs.put(new JSONObject().put("role", "system").put("content", SYSTEM_PROMPT + "\nआज की तारीख़: " + LocalInfo.todayText()));
+            msgs.put(new JSONObject().put("role", "system").put("content", sys));
             for (String[] m : history) msgs.put(new JSONObject().put("role", m[0]).put("content", m[1]));
             JSONObject body = new JSONObject().put("model", "openai").put("messages", msgs).put("private", true);
             String[] out = post("https://text.pollinations.ai/openai", body.toString());
@@ -120,7 +143,7 @@ final class AiClient {
         try {
             JSONObject body = new JSONObject();
             body.put("systemInstruction", new JSONObject().put("parts",
-                    new JSONArray().put(new JSONObject().put("text", SYSTEM_PROMPT + "\nआज की तारीख़: " + LocalInfo.todayText()))));
+                    new JSONArray().put(new JSONObject().put("text", sys))));
             JSONArray contents = new JSONArray();
             for (String[] m : history) {
                 contents.put(new JSONObject().put("role", "assistant".equals(m[0]) ? "model" : "user")
@@ -163,7 +186,7 @@ final class AiClient {
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         c.setRequestProperty("Accept", "application/json");
-        c.setRequestProperty("User-Agent", "Mitra-Android/2.0");
+        c.setRequestProperty("User-Agent", "Mitra-Android/2.1");
         OutputStream os = c.getOutputStream();
         os.write(json.getBytes("UTF-8"));
         os.close();

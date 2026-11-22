@@ -47,7 +47,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity implements ActionHandler.Host {
 
     static final String GREETING = "नमस्ते, मैं मित्र हूँ, आपका मित्र। आप मुझसे कोई भी सवाल पूछ सकते हैं और कुछ भी काम करा सकते हैं।";
-    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "आज की तारीख", "मुझे एक चुटकुला सुनाओ", "WhatsApp खोलो",
+    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "आज की तारीख", "मुझे एक चुटकुला सुनाओ", "WhatsApp खोलो",
             "सुबह 6 बजे का अलार्म लगाओ", "टॉर्च जलाओ", "अभी कितने बजे हैं?", "पढ़ाई में मन कैसे लगाएं?"};
     private static final int REQ_MIC = 7, REQ_SPEECH = 42;
     private static final long FREE_GAP_MS = 46000;
@@ -73,6 +73,10 @@ public class MainActivity extends Activity implements ActionHandler.Host {
 
     private SharedPreferences prefs;
     private ActionHandler actions;
+    private String ttsLocale;
+    private final java.util.Set<String> ttsWarned = new java.util.HashSet<>();
+
+    Lang lang() { return Lang.get(prefs.getString("lang", "auto")); }
 
     @Override
     protected void onCreate(Bundle b) {
@@ -81,8 +85,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         actions = new ActionHandler(this, this, exec);
         buildUi();
         initTts();
-        addBot(GREETING);
-        speak(GREETING);
+        addBot(lang().greeting);
+        speak(lang().greeting);
     }
 
     // ------------------------------------------------------------------ UI
@@ -119,7 +123,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         title.setTextSize(21);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         statusText = new TextView(this);
-        statusText.setText("आपका AI मित्र • ऑनलाइन");
+        statusText.setText(lang().online);
         statusText.setTextColor(Color.parseColor("#FFF3E8"));
         statusText.setTextSize(12);
         titles.addView(title);
@@ -187,7 +191,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         bar.setPadding(dp(8), dp(8), dp(8), dp(8));
 
         input = new EditText(this);
-        input.setHint("कुछ भी पूछिए या बोलिए…");
+        input.setHint(lang().hint);
         input.setHintTextColor(Color.parseColor("#B3A396"));
         input.setTextColor(Ui.TEXT);
         input.setTextSize(16);
@@ -322,6 +326,38 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         runOnUiThread(() -> { addBot(text); speak(text); });
     }
 
+    @Override
+    public void showChoices(String question, List<String> labels, int generation) {
+        runOnUiThread(() -> {
+            addBot(question);
+            speak(question);
+            final LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(4), 0, dp(40), dp(4));
+            final boolean[] done = {false};
+            for (int i = 0; i < labels.size(); i++) {
+                final int idx = i;
+                TextView opt = new TextView(this);
+                opt.setText((labels.size() > 1 ? (i + 1) + ".  " : "") + labels.get(i));
+                opt.setTextSize(15);
+                opt.setTextColor(Ui.SAFFRON_DARK);
+                opt.setBackground(Ui.stroke(Ui.CHIP_BG, Color.parseColor("#FFC79A"), dp(1), dp(16)));
+                opt.setPadding(dp(14), dp(10), dp(14), dp(10));
+                opt.setOnClickListener(v -> {
+                    if (done[0]) return;
+                    addBubble(labels.get(idx), true);
+                    if (actions.choose(generation, idx)) { done[0] = true; box.setAlpha(0.5f); }
+                    else Toast.makeText(this, "यह सवाल पुराना हो गया है", Toast.LENGTH_SHORT).show();
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                lp.topMargin = dp(6);
+                box.addView(opt, lp);
+            }
+            chat.addView(box, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            scrollDown();
+        });
+    }
+
     // ------------------------------------------------------------------ sending
     private void sendTyped() {
         String t = input.getText().toString().trim();
@@ -341,6 +377,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         addBubble(text, true);
         chipBar.setVisibility(View.GONE);
         try {
+            if (actions.handlePending(text)) return;
             if (actions.tryLocal(text)) return;
         } catch (Exception e) {
             // fall through to AI
@@ -376,17 +413,26 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             main.postDelayed(anim[0], 400);
         };
         main.post(anim[0]);
-        statusText.setText("लिख रहा है…");
+        statusText.setText(lang().typing);
         final List<String[]> snapshot = new ArrayList<>(history);
+        if (!snapshot.isEmpty()) {
+            String[] lastMsg = snapshot.get(snapshot.size() - 1);
+            if ("user".equals(lastMsg[0]) && CommandParser.looksLikeCommand(lastMsg[1])) {
+                // The phone parser was unsure: nudge the AI to answer with one exact action tag.
+                snapshot.set(snapshot.size() - 1, new String[]{"user", lastMsg[1]
+                        + "\n\n(ऐप का नोट: यह फ़ोन पर कोई काम कराने का आदेश लगता है। अगर ऐसा है तो एक छोटा वाक्य लिखो और आख़िर में ठीक एक सही [[ACTION:...]] टैग लगाओ। "
+                        + "नंबर न पता हो तो भी call_contact / whatsapp_contact / sms_contact टैग में नाम लिखो — फ़ोन खुद कॉन्टैक्ट्स में ढूँढ लेगा।)"});
+            }
+        }
         final String key = geminiKey();
         final String model = prefs.getString("gemini_model", "gemini-flash-latest");
         exec.execute(() -> {
-            final AiClient.Result r = AiClient.ask(snapshot, key, model);
+            final AiClient.Result r = AiClient.ask(snapshot, key, model, lang().aiInstruction());
             runOnUiThread(() -> {
                 main.removeCallbacks(anim[0]);
                 View row = (View) typing.getParent().getParent();
                 chat.removeView(row);
-                statusText.setText("आपका AI मित्र • ऑनलाइन");
+                statusText.setText(lang().online);
                 if (usingFree || r.waitSeconds > 0) lastFreeCall = System.currentTimeMillis();
                 if (r.waitSeconds > 0) {
                     if (allowRetry) {
@@ -429,7 +475,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             left[0]--;
             if (left[0] <= 0) {
                 chat.removeView((View) tv.getParent().getParent());
-                statusText.setText("आपका AI मित्र • ऑनलाइन");
+                statusText.setText(lang().online);
                 next.run();
                 return;
             }
@@ -477,18 +523,41 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 .replace("*", "").replace("#", "").replace("•", "").trim();
         if (s.isEmpty()) return;
         if (!ttsReady || tts == null) { pendingSpeech = s; return; }
+        useVoiceFor(s);
         tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, "mitra" + (utter++));
+    }
+
+    /** Picks the TTS voice from the reply's script / chosen language; falls back to Hindi, then English. */
+    private void useVoiceFor(String s) {
+        String want = Lang.ttsForText(s, lang());
+        if (want.equals(ttsLocale)) return;
+        int r = tts.setLanguage(Locale.forLanguageTag(want));
+        boolean missing = r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED;
+        if (missing) {
+            if (ttsWarned.add(want)) {
+                Toast.makeText(this, "इस भाषा (" + want + ") की आवाज़ फ़ोन में नहीं मिली — Google Text-to-speech ऐप में यह भाषा की voice "
+                        + "डाउनलोड करें (⚙️ सेटिंग्स › आवाज़)। अभी हिंदी आवाज़ में सुना रहा हूँ।", Toast.LENGTH_LONG).show();
+            }
+            r = tts.setLanguage(new Locale("hi", "IN"));
+            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
+                r = tts.setLanguage(new Locale("en", "IN"));
+                if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) tts.setLanguage(Locale.getDefault());
+            }
+        }
+        ttsLocale = want;
     }
 
     // ------------------------------------------------------------------ speech input
     private Intent recognizerIntent() {
         Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN");
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "hi-IN");
+        String sl = lang().sr;
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, sl);
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, sl);
+        i.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", new String[]{"hi-IN", "en-IN"});
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "बोलिए… मैं सुन रहा हूँ");
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, lang().listening);
         return i;
     }
 
@@ -505,7 +574,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 sr.setRecognitionListener(new Listener());
             }
             listening = true;
-            input.setHint("🎙️ सुन रहा हूँ… बोलिए");
+            input.setHint(lang().listening);
             statusText.setText("सुन रहा है…");
             updateButtons();
             sr.startListening(recognizerIntent());
@@ -523,8 +592,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
 
     private void endListeningUi() {
         listening = false;
-        input.setHint("कुछ भी पूछिए या बोलिए…");
-        statusText.setText("आपका AI मित्र • ऑनलाइन");
+        input.setHint(lang().hint);
+        statusText.setText(lang().online);
         updateButtons();
     }
 
@@ -576,6 +645,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
         super.onRequestPermissionsResult(code, perms, res);
+        boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+        if (actions.onPermissionResult(code, ok)) return;
         if (code == REQ_MIC) {
             if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) startListening();
             else fallbackRecognizer();
@@ -596,12 +667,15 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     protected void onResume() {
         super.onResume();
         if (muteBtn != null) muteBtn.setText(isMuted() ? "🔇" : "🔊");
+        if (input != null && !listening) { input.setHint(lang().hint); statusText.setText(lang().online); }
+        ttsLocale = null;
         if (prefs.getBoolean("clear_chat", false)) {
             prefs.edit().putBoolean("clear_chat", false).apply();
             history.clear();
+            actions.reset();
             while (chat.getChildCount() > 1) chat.removeViewAt(1);
             chipBar.setVisibility(View.VISIBLE);
-            addBot(GREETING);
+            addBot(lang().greeting);
         }
     }
 
