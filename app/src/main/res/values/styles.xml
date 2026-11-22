@@ -1,0 +1,10 @@
+<resources>
+  <style name="MitraTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:colorPrimary">#F26A1B</item>
+    <item name="android:colorPrimaryDark">#E2551A</item>
+    <item name="android:colorAccent">#F26A1B</item>
+    <item name="android:statusBarColor">#E2551A</item>
+    <item name="android:navigationBarColor">#FFFFFF</item>
+    <item name="android:windowBackground">@android:color/white</item>
+  </style>
+</resources>

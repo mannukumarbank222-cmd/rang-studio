@@ -1,7 +1,8 @@
-name: Build APK
+name: Build Mitra APK
 on:
   push:
     branches: [ main ]
+    paths-ignore: [ 'docs/**', 'README.md' ]
   workflow_dispatch:
 permissions:
   contents: write
@@ -14,12 +15,32 @@ jobs:
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v3
         with: { gradle-version: '8.7' }
-      - run: gradle assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk RangStudio.apk
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo "KEYSTORE_B64 secret missing"; exit 1; }
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/mitra-release.p12"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/mitra-release.p12" >> "$GITHUB_ENV"
+      - name: Build signed release
+        env:
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: mitra
+        run: gradle assembleRelease --stacktrace
+      - name: Verify signature
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK" || { ls -R app/build/outputs/apk; exit 1; }
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/apksigner verify --print-certs "$APK"
+          $BT/aapt dump badging "$APK" | head -5
+          cp "$APK" Mitra.apk
+          rm -f "$RUNNER_TEMP/mitra-release.p12"
       - uses: actions/upload-artifact@v4
-        with: { name: RangStudio-APK, path: RangStudio.apk }
+        with: { name: Mitra-APK, path: Mitra.apk }
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Rang Studio build ${{ github.run_number }}
-          files: RangStudio.apk
+          tag_name: mitra-v2.0-build-${{ github.run_number }}
+          name: Mitra v2.0 (build ${{ github.run_number }})
+          body: "Mitra - आपका AI मित्र. Signed release APK. Note: if old Rang Studio is installed, uninstall it first (signing key changed)."
+          files: Mitra.apk
