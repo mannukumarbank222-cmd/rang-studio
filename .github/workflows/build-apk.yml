@@ -40,7 +40,7 @@ jobs:
         with: { name: Mitra-APK, path: Mitra.apk }
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: mitra-v2.1-build-${{ github.run_number }}
-          name: Mitra v2.1 (build ${{ github.run_number }})
-          body: "Mitra v2.1 - संपर्क से नाम लेकर सीधे कॉल, WhatsApp/SMS, कई भारतीय भाषाएँ। Signed with the same key as v2.0, installs as an update over v2.0."
+          tag_name: mitra-v2.2-build-${{ github.run_number }}
+          name: Mitra v2.2 (build ${{ github.run_number }})
+          body: "Mitra v2.2 - हमेशा सुनें ('मित्र' बोलकर जगाएँ), बातचीत मोड, हर सवाल का जवाब। Signed with the same key as v2.0/v2.1, installs as an update."
           files: Mitra.apk
