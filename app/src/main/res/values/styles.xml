@@ -7,4 +7,12 @@
     <item name="android:navigationBarColor">#FFFFFF</item>
     <item name="android:windowBackground">@android:color/white</item>
   </style>
+  <style name="MitraVoice" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:windowIsTranslucent">true</item>
+    <item name="android:windowBackground">@android:color/transparent</item>
+    <item name="android:windowNoTitle">true</item>
+    <item name="android:backgroundDimEnabled">false</item>
+    <item name="android:colorAccent">#F26A1B</item>
+    <item name="android:statusBarColor">@android:color/transparent</item>
+  </style>
 </resources>

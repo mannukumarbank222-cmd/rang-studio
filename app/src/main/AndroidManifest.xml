@@ -6,6 +6,15 @@
   <!-- Asked only when the user first asks Mitra to call/message someone by name -->
   <uses-permission android:name="android.permission.READ_CONTACTS"/>
   <uses-permission android:name="android.permission.CALL_PHONE"/>
+  <!-- "हमेशा सुनें" (always-listen wake word) -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
   <uses-feature android:name="android.hardware.telephony" android:required="false"/>
   <uses-feature android:name="android.hardware.microphone" android:required="false"/>
   <uses-feature android:name="android.hardware.camera" android:required="false"/>
@@ -43,5 +52,18 @@
       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
     </activity>
     <activity android:name=".SettingsActivity" android:exported="false" android:label="सेटिंग्स"/>
+    <activity android:name=".WakeSetupActivity" android:exported="false" android:label="हमेशा सुनें"/>
+    <activity android:name=".VoiceActivity" android:exported="false" android:label="मित्र"
+        android:theme="@style/MitraVoice" android:launchMode="singleTask" android:taskAffinity="com.playrang.rangstudio.voice"
+        android:excludeFromRecents="true" android:showWhenLocked="true" android:turnScreenOn="true"
+        android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"/>
+    <service android:name=".WakeService" android:exported="false" android:foregroundServiceType="microphone"/>
+    <receiver android:name=".BootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

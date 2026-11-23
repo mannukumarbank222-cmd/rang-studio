@@ -28,6 +28,13 @@ public class SettingsActivity extends Activity {
 
     private SharedPreferences prefs;
     private LinearLayout body;
+    private Switch wakeSwitch;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (wakeSwitch != null) wakeSwitch.setChecked(WakeService.enabled(this));
+    }
 
     private int dp(float v) { return Ui.dp(this, v); }
 
@@ -80,7 +87,7 @@ public class SettingsActivity extends Activity {
         TextView name = text("मित्र (Mitra)", 22, Ui.TEXT, true);
         name.setGravity(Gravity.CENTER);
         about.addView(name);
-        String ver = "2.1";
+        String ver = "2.2";
         try {
             PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             ver = pi.versionName + " (" + pi.versionCode + ")";
@@ -145,7 +152,7 @@ public class SettingsActivity extends Activity {
         // AI engine
         LinearLayout ai = card();
         ai.addView(text("AI इंजन", 16, Ui.TEXT, true));
-        ai.addView(text("डिफ़ॉल्ट रूप से मित्र एक मुफ़्त AI सेवा इस्तेमाल करता है, जिसमें लगभग हर 45 सेकंड में एक जवाब मिलता है। "
+        ai.addView(text("डिफ़ॉल्ट रूप से मित्र मुफ़्त AI सेवाएँ इस्तेमाल करता है (एक न चले तो दूसरी, फिर Wikipedia)। मुफ़्त सेवा में कभी-कभी कुछ सेकंड रुकना पड़ सकता है। "
                 + "तेज़ और बिना रुकावट जवाबों के लिए अपनी मुफ़्त Google Gemini API key यहाँ डालें (वैकल्पिक)।", 13.5f, Ui.MUTED, false));
         final EditText key = new EditText(this);
         key.setHint("Gemini API key (AIza…)");
@@ -182,6 +189,35 @@ public class SettingsActivity extends Activity {
         getKey.setOnClickListener(x -> open("https://aistudio.google.com/apikey"));
         ai.addView(getKey);
 
+        // Always listen (wake word)
+        LinearLayout wake = card();
+        wake.addView(text("हमेशा सुनें (‘मित्र’ बोलकर जगाएँ)", 16, Ui.TEXT, true));
+        wake.addView(text("स्क्रीन बंद या फ़ोन लॉक हो तब भी ‘मित्र’ बोलिए और सवाल पूछिए। ‘मित्र’ शब्द फ़ोन पर ही पहचाना जाता है, आवाज़ रिकॉर्ड/अपलोड नहीं होती। "
+                + "बैटरी थोड़ी ज़्यादा लगती है और एक नोटिफ़िकेशन दिखता है।", 13.5f, Ui.MUTED, false));
+        wakeSwitch = new Switch(this);
+        wakeSwitch.setText("हमेशा सुनें");
+        wakeSwitch.setTextSize(15);
+        wakeSwitch.setTextColor(Ui.TEXT);
+        wakeSwitch.setPadding(0, dp(8), 0, dp(4));
+        wakeSwitch.setChecked(WakeService.enabled(this));
+        wakeSwitch.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> {
+            if (on == WakeService.enabled(this)) return;
+            if (on) {
+                startActivity(new Intent(this, WakeSetupActivity.class).putExtra("enable", true));
+            } else {
+                prefs.edit().putBoolean(WakeService.PREF_ON, false).apply();
+                WakeService.stop(this);
+                Toast.makeText(this, "हमेशा सुनें बंद", Toast.LENGTH_SHORT).show();
+            }
+        });
+        wake.addView(wakeSwitch);
+        TextView setup = button("🛠️ सेटअप (बैटरी, Autostart, मॉडल)", false);
+        setup.setOnClickListener(x -> startActivity(new Intent(this, WakeSetupActivity.class)));
+        LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        wl.topMargin = dp(8);
+        wake.addView(setup, wl);
+        wake.addView(text("बातचीत मोड: चैट में ऊपर 📞 दबाएँ — फ़ोन कॉल की तरह लगातार बात कीजिए, बंद करने के लिए “बस” बोलें।", 13f, Ui.MUTED, false));
+
         // Chat
         LinearLayout chat = card();
         chat.addView(text("बातचीत", 16, Ui.TEXT, true));
@@ -198,7 +234,8 @@ public class SettingsActivity extends Activity {
         // Privacy
         LinearLayout priv = card();
         priv.addView(text("निजता / Privacy", 16, Ui.TEXT, true));
-        priv.addView(text("माइक की आवाज़ सिर्फ़ बोले गए शब्दों को टेक्स्ट में बदलने के लिए इस्तेमाल होती है। आपके सवाल जवाब पाने के लिए AI सेवा को भेजे जाते हैं। "
+        priv.addView(text("माइक की आवाज़ सिर्फ़ बोले गए शब्दों को टेक्स्ट में बदलने के लिए इस्तेमाल होती है। ‘हमेशा सुनें’ में ‘मित्र’ शब्द फ़ोन पर ही पहचाना जाता है — आवाज़ न रिकॉर्ड होती है, न अपलोड। "
+                + "आपके सवाल का सिर्फ़ टेक्स्ट जवाब पाने के लिए AI सेवा (और ज़रूरत पड़ने पर Wikipedia/DuckDuckGo) को भेजा जाता है। "
                 + "हम अपने किसी सर्वर पर आपकी बातचीत नहीं रखते। नाम से कॉल/मैसेज के लिए कॉन्टैक्ट्स सिर्फ़ फ़ोन पर पढ़े जाते हैं — न अपलोड होते हैं, न AI को भेजे जाते हैं।", 13.5f, Ui.MUTED, false));
         TextView pp = link("प्राइवेसी पॉलिसी पढ़ें / Privacy Policy");
         pp.setOnClickListener(x -> open(PRIVACY_URL));

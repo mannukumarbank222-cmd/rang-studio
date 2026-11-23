@@ -18,6 +18,7 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -50,16 +51,15 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "आज की तारीख", "मुझे एक चुटकुला सुनाओ", "WhatsApp खोलो",
             "सुबह 6 बजे का अलार्म लगाओ", "टॉर्च जलाओ", "अभी कितने बजे हैं?", "पढ़ाई में मन कैसे लगाएं?"};
     private static final int REQ_MIC = 7, REQ_SPEECH = 42;
-    private static final long FREE_GAP_MS = 46000;
+    static final String EXTRA_START_WAKE = "start_wake";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService exec = Executors.newFixedThreadPool(2);
-    private final List<String[]> history = new ArrayList<>();
 
     private LinearLayout chat;
     private ScrollView scroll;
     private EditText input;
-    private TextView micBtn, sendBtn, muteBtn, statusText;
+    private TextView micBtn, sendBtn, muteBtn, statusText, convBtn;
     private HorizontalScrollView chipBar;
 
     private TextToSpeech tts;
@@ -68,7 +68,9 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private SpeechRecognizer sr;
     private boolean listening;
     private boolean busy;
-    private long lastFreeCall;
+    private boolean convMode, resumed;
+    private int convMisses;
+    private String lastUtt;
     private int utter;
 
     private SharedPreferences prefs;
@@ -87,6 +89,29 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         initTts();
         addBot(lang().greeting);
         speak(lang().greeting);
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_START_WAKE, false)) WakeService.start(this);
+        else WakeService.startIfEnabled(this);
+        main.postDelayed(this::offerWake, 2500);
+    }
+
+    @Override
+    protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        if (i != null && i.getBooleanExtra(EXTRA_START_WAKE, false)) WakeService.start(this);
+    }
+
+    /** After first launch: offer to turn on "हमेशा सुनें" once. */
+    private void offerWake() {
+        if (isFinishing() || prefs.getBoolean("wake_offered", false) || WakeService.enabled(this)) return;
+        prefs.edit().putBoolean("wake_offered", true).apply();
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("हमेशा सुनें चालू करें?")
+                .setMessage("फ़ोन लॉक हो या स्क्रीन बंद, बस “मित्र” बोलिए और सवाल पूछिए या काम कहिए — जैसे “मित्र, सोनू को कॉल करो”।\n\n"
+                        + "‘मित्र’ शब्द फ़ोन पर ही पहचाना जाता है, आवाज़ रिकॉर्ड या अपलोड नहीं होती। इसमें बैटरी थोड़ी ज़्यादा लगेगी और एक नोटिफ़िकेशन दिखेगा। "
+                        + "बाद में ⚙️ सेटिंग्स से कभी भी बदल सकते हैं।")
+                .setPositiveButton("हाँ, चालू करें", (d, w) -> startActivity(new Intent(this, WakeSetupActivity.class).putExtra("enable", true)))
+                .setNegativeButton("अभी नहीं", null)
+                .show();
     }
 
     // ------------------------------------------------------------------ UI
@@ -130,6 +155,10 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         titles.addView(statusText);
         header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        convBtn = headerIcon("📞");
+        convBtn.setContentDescription("बातचीत मोड");
+        convBtn.setOnClickListener(v -> { if (convMode) endConversation(true); else startConversation(); });
+        header.addView(convBtn);
         muteBtn = headerIcon(isMuted() ? "🔇" : "🔊");
         muteBtn.setContentDescription("आवाज़ चालू/बंद");
         muteBtn.setOnClickListener(v -> toggleMute());
@@ -376,6 +405,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (tts != null) tts.stop();
         addBubble(text, true);
         chipBar.setVisibility(View.GONE);
+        if (convMode && Convo.isStop(text)) { endConversation(false); return; }
         try {
             if (actions.handlePending(text)) return;
             if (actions.tryLocal(text)) return;
@@ -386,8 +416,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             addBot("एक पल रुकिए, पिछले सवाल का जवाब आ रहा है… 🙏");
             return;
         }
-        history.add(new String[]{"user", text});
-        while (history.size() > 20) history.remove(0);
+        Convo.add("user", text);
         askAi(true);
     }
 
@@ -395,13 +424,6 @@ public class MainActivity extends Activity implements ActionHandler.Host {
 
     private void askAi(final boolean allowRetry) {
         busy = true;
-        final boolean usingFree = geminiKey().trim().length() <= 10;
-        long since = System.currentTimeMillis() - lastFreeCall;
-        if (usingFree && lastFreeCall > 0 && since < FREE_GAP_MS) {
-            int secs = (int) Math.ceil((FREE_GAP_MS - since) / 1000.0);
-            waitThen(secs, () -> askAi(allowRetry), false);
-            return;
-        }
         final TextView typing = addBubble("लिख रहा हूँ", false);
         final Runnable[] anim = new Runnable[1];
         final int[] dots = {0};
@@ -414,7 +436,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         };
         main.post(anim[0]);
         statusText.setText(lang().typing);
-        final List<String[]> snapshot = new ArrayList<>(history);
+        final List<String[]> snapshot = Convo.snapshot();
         if (!snapshot.isEmpty()) {
             String[] lastMsg = snapshot.get(snapshot.size() - 1);
             if ("user".equals(lastMsg[0]) && CommandParser.looksLikeCommand(lastMsg[1])) {
@@ -427,37 +449,17 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         final String key = geminiKey();
         final String model = prefs.getString("gemini_model", "gemini-flash-latest");
         exec.execute(() -> {
-            final AiClient.Result r = AiClient.ask(snapshot, key, model, lang().aiInstruction());
+            final AiClient.Result r = AiClient.ask(snapshot, key, model, lang().aiInstruction(), 45);
             runOnUiThread(() -> {
                 main.removeCallbacks(anim[0]);
                 View row = (View) typing.getParent().getParent();
                 chat.removeView(row);
                 statusText.setText(lang().online);
-                if (usingFree || r.waitSeconds > 0) lastFreeCall = System.currentTimeMillis();
-                if (r.waitSeconds > 0) {
-                    if (allowRetry) {
-                        lastFreeCall = System.currentTimeMillis() - FREE_GAP_MS + r.waitSeconds * 1000L;
-                        waitThen(r.waitSeconds, () -> askAi(false), true);
-                    } else {
-                        busy = false;
-                        if (!history.isEmpty()) history.remove(history.size() - 1);
-                        String m = "अभी मुफ़्त AI पर बहुत भीड़ है 🙏 " + r.waitSeconds + " सेकंड बाद फिर पूछिए। "
-                                + "तेज़ जवाबों के लिए ⚙️ सेटिंग्स में अपनी मुफ़्त Gemini key डाल सकते हैं।";
-                        addBot(m);
-                        speak("थोड़ा रुकिए, " + r.waitSeconds + " सेकंड में फिर पूछिए।");
-                    }
-                    return;
-                }
                 busy = false;
-                if (r.error != null || r.text == null) {
-                    if (!history.isEmpty()) history.remove(history.size() - 1);
-                    addBot("😕 " + (r.error != null ? r.error : "जवाब नहीं मिला।") + " कृपया फिर से पूछिए।");
-                    return;
-                }
-                String shown = clean(actions.runTags(r.text));
+                String txt = r.text == null || r.text.trim().isEmpty() ? AiClient.sorry() : r.text;
+                String shown = clean(actions.runTags(txt));
                 if (shown.isEmpty()) shown = "ठीक है! 👍";
-                history.add(new String[]{"assistant", shown});
-                while (history.size() > 20) history.remove(0);
+                Convo.add("assistant", shown);
                 addBot(shown);
                 speak(shown);
             });
@@ -507,14 +509,52 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             }
             tts.setSpeechRate(1.0f);
             tts.setPitch(1.05f);
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override public void onStart(String id) { }
+                @Override public void onDone(String id) { main.post(() -> spoke(id)); }
+                @Override public void onError(String id) { main.post(() -> spoke(id)); }
+            });
             ttsReady = true;
             if (pendingSpeech != null) { String p = pendingSpeech; pendingSpeech = null; speakForce(p); }
         });
     }
 
     private void speak(String text) {
-        if (isMuted()) return;
+        if (isMuted() && !convMode) return; // conversation mode always speaks
         speakForce(text);
+    }
+
+    /** Called when an utterance finished: in conversation mode, listen again. */
+    private void spoke(String id) {
+        if (id == null || !id.equals(lastUtt)) return;
+        if (convMode && resumed && !busy && !listening && (tts == null || !tts.isSpeaking())) convListen();
+    }
+
+    // ------------------------------------------------------------------ conversation mode ("बातचीत मोड")
+    private void startConversation() {
+        convMode = true;
+        convMisses = 0;
+        WakeService.pause(this, "ui", 0);
+        convBtn.setText("⏹️");
+        convBtn.setBackground(Ui.round(Color.parseColor("#33FFFFFF"), dp(20)));
+        Toast.makeText(this, "बातचीत मोड चालू — बोलते रहिए। रोकने के लिए “बस” बोलें या ⏹️ दबाएँ।", Toast.LENGTH_LONG).show();
+        addBot("📞 बातचीत मोड चालू — फ़ोन कॉल की तरह बात कीजिए। बंद करने के लिए “बस” या “बंद करो” बोलिए।");
+        speakForce("बातचीत मोड चालू। बोलिए।");
+    }
+
+    private void endConversation(boolean silent) {
+        convMode = false;
+        convBtn.setText("📞");
+        convBtn.setBackground(null);
+        if (listening) stopListening();
+        WakeService.resume(this, "ui");
+        if (!silent) { addBot("ठीक है, बातचीत बंद। जब चाहें फिर बुलाइए 🙏"); speakForce("ठीक है, बातचीत बंद।"); }
+        else if (tts != null) tts.stop();
+    }
+
+    private void convListen() {
+        if (!convMode || !resumed || busy || listening) return;
+        startListening();
     }
 
     private void speakForce(String text) {
@@ -524,7 +564,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (s.isEmpty()) return;
         if (!ttsReady || tts == null) { pendingSpeech = s; return; }
         useVoiceFor(s);
-        tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, "mitra" + (utter++));
+        lastUtt = "mitra" + (utter++);
+        tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, lastUtt);
     }
 
     /** Picks the TTS voice from the reply's script / chosen language; falls back to Hindi, then English. */
@@ -574,6 +615,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 sr.setRecognitionListener(new Listener());
             }
             listening = true;
+            WakeService.pause(this, "ui", convMode ? 0 : 60000);
             input.setHint(lang().listening);
             statusText.setText("सुन रहा है…");
             updateButtons();
@@ -592,6 +634,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
 
     private void endListeningUi() {
         listening = false;
+        if (!convMode) WakeService.resume(this, "ui");
         input.setHint(lang().hint);
         statusText.setText(lang().online);
         updateButtons();
@@ -617,6 +660,15 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         public void onError(int error) {
             micBtn.setScaleX(1f); micBtn.setScaleY(1f);
             endListeningUi();
+            if (convMode && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                if (++convMisses >= 3) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
+                else main.postDelayed(MainActivity.this::convListen, 300);
+                return;
+            }
+            if (convMode && (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT)) {
+                main.postDelayed(MainActivity.this::convListen, 800);
+                return;
+            }
             if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                 Toast.makeText(MainActivity.this, "आवाज़ साफ़ नहीं आई, फिर से 🎤 दबाकर बोलिए।", Toast.LENGTH_SHORT).show();
             } else if (error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
@@ -633,7 +685,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             endListeningUi();
             ArrayList<String> r = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             input.setText("");
-            if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) submit(r.get(0).trim());
+            if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) { convMisses = 0; submit(r.get(0).trim()); }
+            else if (convMode) main.postDelayed(MainActivity.this::convListen, 300);
         }
         public void onPartialResults(Bundle partial) {
             ArrayList<String> r = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
@@ -666,12 +719,15 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        if (convMode) WakeService.pause(this, "ui", 0);
+        if (convMode && !busy && !listening && (tts == null || !tts.isSpeaking())) main.postDelayed(this::convListen, 600);
         if (muteBtn != null) muteBtn.setText(isMuted() ? "🔇" : "🔊");
         if (input != null && !listening) { input.setHint(lang().hint); statusText.setText(lang().online); }
         ttsLocale = null;
         if (prefs.getBoolean("clear_chat", false)) {
             prefs.edit().putBoolean("clear_chat", false).apply();
-            history.clear();
+            Convo.clear();
             actions.reset();
             while (chat.getChildCount() > 1) chat.removeViewAt(1);
             chipBar.setVisibility(View.VISIBLE);
@@ -682,7 +738,9 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     @Override
     protected void onPause() {
         super.onPause();
+        resumed = false;
         if (listening) stopListening();
+        WakeService.resume(this, "ui");
     }
 
     @Override
