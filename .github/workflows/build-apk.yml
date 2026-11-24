@@ -40,7 +40,7 @@ jobs:
         with: { name: Mitra-APK, path: Mitra.apk }
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: mitra-v2.2-build-${{ github.run_number }}
-          name: Mitra v2.2 (build ${{ github.run_number }})
-          body: "Mitra v2.2 - हमेशा सुनें ('मित्र' बोलकर जगाएँ), बातचीत मोड, हर सवाल का जवाब। Signed with the same key as v2.0/v2.1, installs as an update."
+          tag_name: mitra-v3.0-build-${{ github.run_number }}
+          name: Mitra v3.0 (build ${{ github.run_number }})
+          body: "Mitra v3.0 - 🎙️ Live बात: ChatGPT जैसी live आवाज़ वाली बातचीत (Gemini Live, बीच में टोक सकते हैं, खुद कॉल/WhatsApp/YouTube/अलार्म जैसे काम करता है, Google Search से ताज़ा जानकारी)। Live के लिए सेटिंग्स में अपनी मुफ़्त Gemini key डालें। तेज़ चैट (जवाब लिखते-लिखते बोलना)। Signed with the same key as v2.x, installs as an update."
           files: Mitra.apk

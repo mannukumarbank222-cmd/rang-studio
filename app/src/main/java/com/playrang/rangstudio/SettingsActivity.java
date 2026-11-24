@@ -188,6 +188,29 @@ public class SettingsActivity extends Activity {
         TextView getKey = link("मुफ़्त Gemini key पाएँ: aistudio.google.com");
         getKey.setOnClickListener(x -> open("https://aistudio.google.com/apikey"));
         ai.addView(getKey);
+        ai.addView(text("🎙️ Live बात (ChatGPT जैसी आवाज़ वाली बातचीत) के लिए यही key चाहिए: aistudio.google.com खोलें → Google से लॉगिन → \"Get API key\" → \"Create API key\" → कॉपी करके ऊपर डालें और सेव करें। मुफ़्त है।",
+                13f, Ui.MUTED, false));
+
+        // Live voice
+        ai.addView(text("Live आवाज़", 15, Ui.TEXT, true));
+        final String[][] voices = {{"Puck", "Puck (पुरुष, खुशमिज़ाज)"}, {"Charon", "Charon (पुरुष, गंभीर)"}, {"Orus", "Orus (पुरुष)"},
+                {"Kore", "Kore (महिला)"}, {"Aoede", "Aoede (महिला, मधुर)"}};
+        android.widget.RadioGroup vg = new android.widget.RadioGroup(this);
+        String curVoice = prefs.getString("live_voice", "Puck");
+        for (int vi = 0; vi < voices.length; vi++) {
+            android.widget.RadioButton rb = new android.widget.RadioButton(this);
+            rb.setId(4000 + vi);
+            rb.setText(voices[vi][1]);
+            rb.setTextColor(Ui.TEXT);
+            rb.setTextSize(14);
+            if (voices[vi][0].equals(curVoice)) rb.setChecked(true);
+            vg.addView(rb);
+        }
+        vg.setOnCheckedChangeListener((group, id) -> {
+            int vi = id - 4000;
+            if (vi >= 0 && vi < voices.length) prefs.edit().putString("live_voice", voices[vi][0]).apply();
+        });
+        ai.addView(vg);
 
         // Always listen (wake word)
         LinearLayout wake = card();

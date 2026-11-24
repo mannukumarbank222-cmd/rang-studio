@@ -242,7 +242,7 @@ final class ActionHandler {
                     if (waInstalled()) whatsappNumber(a, b, null); else smsNumber(a, b, null);
                     break;
                 case "contact_number": contactAction("number", a, ""); break;
-                case "alarm": setAlarmFromText(norm(a)); break;
+                case "alarm": setAlarmFromText(norm(a.replaceAll("(\\d)\\s*:\\s*(\\d)", "$1.$2"))); break; // "06:30" keeps its minutes
                 case "timer": {
                     String d = CommandParser.digits(a);
                     int secs = Integer.parseInt(d.isEmpty() ? "60" : d);

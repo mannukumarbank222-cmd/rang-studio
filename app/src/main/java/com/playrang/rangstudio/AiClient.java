@@ -157,7 +157,7 @@ final class AiClient {
                     + "never refuse ordinary questions. Reply in the same language and script as the user, in 1-3 short spoken-friendly sentences, no markdown.";
             String url = "https://text.pollinations.ai/" + URLEncoder.encode(p.toString(), "UTF-8").replace("+", "%20")
                     + "?model=openai&private=true&system=" + URLEncoder.encode(shortSys, "UTF-8").replace("+", "%20");
-            String[] out = request("GET", url, null, 10000, 30000);
+            String[] out = request("GET", url, null, 8000, 20000);
             int code = Integer.parseInt(out[0]);
             String t = out[1] == null ? "" : out[1].trim();
             String low = t.toLowerCase();
@@ -178,7 +178,7 @@ final class AiClient {
             msgs.put(new JSONObject().put("role", "system").put("content", sys));
             for (String[] m : history) msgs.put(new JSONObject().put("role", m[0]).put("content", m[1]));
             JSONObject body = new JSONObject().put("model", model).put("messages", msgs);
-            String[] out = request("POST", "https://api.llm7.io/v1/chat/completions", body.toString(), 10000, 30000);
+            String[] out = request("POST", "https://api.llm7.io/v1/chat/completions", body.toString(), 8000, 20000);
             int code = Integer.parseInt(out[0]);
             String t = out[1] == null ? "" : out[1].trim();
             if (code == 400 && t.contains("unavailable")) { res.error = "model"; return res; }
@@ -204,7 +204,7 @@ final class AiClient {
             msgs.put(new JSONObject().put("role", "system").put("content", sys));
             for (String[] m : history) msgs.put(new JSONObject().put("role", m[0]).put("content", m[1]));
             JSONObject body = new JSONObject().put("model", "openai").put("messages", msgs).put("private", true);
-            String[] out = request("POST", "https://text.pollinations.ai/openai", body.toString(), 10000, 35000);
+            String[] out = request("POST", "https://text.pollinations.ai/openai", body.toString(), 8000, 22000);
             int code = Integer.parseInt(out[0]);
             String txt = out[1];
             if (txt == null) txt = "";
@@ -292,13 +292,110 @@ final class AiClient {
         return res;
     }
 
+    // ------------------------------------------------------------------ streaming (Gemini SSE) — speech starts with the first sentence
+    interface Sink { void onText(String delta); }
+
+    private static volatile boolean noThinkingCfg;
+
+    /**
+     * Like {@link #ask} but, when a Gemini key is set, streams the reply through sink as it is written.
+     * If streaming fails before any text arrived, falls back to the free chain (sink is then not called).
+     */
+    static Result askStream(List<String[]> history, String geminiKey, String geminiModel, String langLine, int maxWaitSec, Sink sink) {
+        if (geminiKey != null && geminiKey.trim().length() > 10) {
+            sys = system(langLine);
+            final boolean[] any = {false};
+            Result r = geminiStream(history, geminiKey.trim(), geminiModel, d -> { any[0] = true; sink.onText(d); });
+            if (ok(r) || any[0]) { r.source = "gemini-stream"; if (r.text == null) r.text = ""; r.error = null; return r; }
+            if (r.waitSeconds > 0 && r.waitSeconds <= Math.min(maxWaitSec, 20)) {
+                try { Thread.sleep(r.waitSeconds * 1000L); } catch (InterruptedException e) { return text(sorry(), "none"); }
+                r = geminiStream(history, geminiKey.trim(), geminiModel, d -> { any[0] = true; sink.onText(d); });
+                if (ok(r) || any[0]) { r.source = "gemini-stream"; if (r.text == null) r.text = ""; r.error = null; return r; }
+            }
+            return ask(history, null, null, langLine, maxWaitSec); // free chain, no second Gemini try
+        }
+        return ask(history, null, null, langLine, maxWaitSec);
+    }
+
+    static Result geminiStream(List<String[]> history, String key, String model, Sink sink) {
+        Result res = new Result();
+        if (model == null || model.trim().isEmpty()) model = "gemini-flash-latest";
+        HttpURLConnection c = null;
+        try {
+            JSONObject body = new JSONObject();
+            body.put("systemInstruction", new JSONObject().put("parts", new JSONArray().put(new JSONObject().put("text", sys))));
+            JSONArray contents = new JSONArray();
+            for (String[] m : history) contents.put(new JSONObject().put("role", "assistant".equals(m[0]) ? "model" : "user")
+                    .put("parts", new JSONArray().put(new JSONObject().put("text", m[1]))));
+            body.put("contents", contents);
+            if (!noThinkingCfg) body.put("generationConfig", new JSONObject().put("thinkingConfig", new JSONObject().put("thinkingLevel", "low")));
+            c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/" + URLEncoder.encode(model.trim(), "UTF-8")
+                    + ":streamGenerateContent?alt=sse&key=" + URLEncoder.encode(key, "UTF-8")).openConnection();
+            c.setRequestMethod("POST");
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(20000);
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            c.setRequestProperty("Accept", "text/event-stream");
+            c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
+            OutputStream os = c.getOutputStream();
+            os.write(body.toString().getBytes("UTF-8"));
+            os.close();
+            int code = c.getResponseCode();
+            if (code >= 400) {
+                InputStream es = c.getErrorStream();
+                String eb = es == null ? "" : readAll(es);
+                if (code == 400 && !noThinkingCfg && eb.toLowerCase(java.util.Locale.ROOT).contains("think")) {
+                    noThinkingCfg = true;
+                    c.disconnect();
+                    return geminiStream(history, key, model, sink);
+                }
+                if (code == 404 && !"gemini-flash-latest".equals(model.trim())) { c.disconnect(); return geminiStream(history, key, "gemini-flash-latest", sink); }
+                if (code == 429) { res.waitSeconds = parseWait(eb); if (res.waitSeconds > 60) res.waitSeconds = 30; return res; }
+                res.error = (code == 400 || code == 403) ? "Gemini API key सही नहीं लग रही — सेटिंग्स में जाँचिए।" : "Gemini से जवाब नहीं मिला (कोड " + code + ")।";
+                return res;
+            }
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(c.getInputStream(), "UTF-8"));
+            StringBuilder all = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (!line.startsWith("data:")) continue;
+                String d = line.substring(5).trim();
+                if (d.isEmpty() || d.equals("[DONE]")) continue;
+                try {
+                    JSONObject j = new JSONObject(d);
+                    JSONArray cands = j.optJSONArray("candidates");
+                    if (cands == null || cands.length() == 0) continue;
+                    JSONObject content = cands.getJSONObject(0).optJSONObject("content");
+                    JSONArray parts = content == null ? null : content.optJSONArray("parts");
+                    if (parts == null) continue;
+                    StringBuilder delta = new StringBuilder();
+                    for (int i = 0; i < parts.length(); i++) {
+                        JSONObject p = parts.getJSONObject(i);
+                        if (p.optBoolean("thought", false)) continue;
+                        delta.append(p.optString("text", ""));
+                    }
+                    if (delta.length() > 0) { all.append(delta); sink.onText(delta.toString()); }
+                } catch (Exception ignored) { }
+            }
+            br.close();
+            if (all.toString().trim().isEmpty()) res.error = "Gemini से खाली जवाब आया।";
+            else res.text = all.toString().trim();
+        } catch (Exception e) {
+            res.error = "इंटरनेट कनेक्शन जाँचिए, Gemini से जुड़ नहीं पाया।";
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Exception ignored) { }
+        }
+        return res;
+    }
+
     /** Returns {statusCode, body}. */
     static String[] request(String method, String url, String json, int connectMs, int readMs) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod(method);
         c.setConnectTimeout(connectMs);
         c.setReadTimeout(readMs);
-        c.setRequestProperty("User-Agent", "Mitra-Android/2.2");
+        c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
         c.setRequestProperty("Accept", "application/json, text/plain, */*");
         if (json != null) {
             c.setDoOutput(true);
@@ -320,12 +417,12 @@ final class AiClient {
     static String[] post(String url, String json) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod("POST");
-        c.setConnectTimeout(12000);
-        c.setReadTimeout(35000);
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(25000);
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         c.setRequestProperty("Accept", "application/json");
-        c.setRequestProperty("User-Agent", "Mitra-Android/2.2");
+        c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
         OutputStream os = c.getOutputStream();
         os.write(json.getBytes("UTF-8"));
         os.close();

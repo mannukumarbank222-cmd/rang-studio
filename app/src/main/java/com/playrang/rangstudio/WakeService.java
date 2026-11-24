@@ -446,7 +446,9 @@ public class WakeService extends Service {
 
     // ------------------------------------------------------------------ wake
     private void onWake(String cmd) {
-        Intent i = new Intent(this, VoiceActivity.class)
+        // With a Gemini key the wake word opens the Live conversation; otherwise the small voice screen.
+        boolean live = getSharedPreferences("mitra", MODE_PRIVATE).getString("gemini_key", "").trim().length() > 10;
+        Intent i = new Intent(this, live ? LiveActivity.class : VoiceActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(VoiceActivity.EXTRA_CMD, cmd == null ? "" : cmd);
         boolean canDraw = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);

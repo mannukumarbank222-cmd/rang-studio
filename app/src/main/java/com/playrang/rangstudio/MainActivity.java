@@ -100,6 +100,13 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (i != null && i.getBooleanExtra(EXTRA_START_WAKE, false)) WakeService.start(this);
     }
 
+    private void openLive() {
+        if (tts != null) tts.stop();
+        if (convMode) endConversation(true);
+        if (listening) stopListening();
+        startActivity(new Intent(this, LiveActivity.class));
+    }
+
     /** After first launch: offer to turn on "हमेशा सुनें" once. */
     private void offerWake() {
         if (isFinishing() || prefs.getBoolean("wake_offered", false) || WakeService.enabled(this)) return;
@@ -168,6 +175,22 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         settings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
         header.addView(settings);
         root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Prominent "Live बात" entry (ChatGPT-style voice conversation)
+        TextView liveBtn = new TextView(this);
+        liveBtn.setText("🎙️  Live बात — बोलिए, मित्र तुरंत जवाब देगा");
+        liveBtn.setTextColor(Color.WHITE);
+        liveBtn.setTextSize(16);
+        liveBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        liveBtn.setGravity(Gravity.CENTER);
+        liveBtn.setPadding(dp(16), dp(12), dp(16), dp(12));
+        liveBtn.setElevation(dp(2));
+        liveBtn.setContentDescription("Live बात शुरू करें");
+        liveBtn.setOnClickListener(v -> openLive());
+        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        llp.setMargins(dp(10), dp(8), dp(10), 0);
+        liveBtn.setBackground(Ui.round(Color.parseColor("#2B2118"), dp(26)));
+        root.addView(liveBtn, llp);
 
         // Chat list
         scroll = new ScrollView(this);
@@ -448,20 +471,48 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         }
         final String key = geminiKey();
         final String model = prefs.getString("gemini_model", "gemini-flash-latest");
+        final SentenceBuffer buf = new SentenceBuffer();
+        final boolean[] spoke = {false};
+        final TextView[] live = {null};
         exec.execute(() -> {
-            final AiClient.Result r = AiClient.ask(snapshot, key, model, lang().aiInstruction(), 45);
+            final AiClient.Result r = AiClient.askStream(snapshot, key, model, lang().aiInstruction(), 45, delta -> {
+                final List<String> ready = buf.push(delta);
+                final String vis = clean(buf.visible());
+                main.post(() -> {
+                    if (live[0] == null) {
+                        if (vis.isEmpty()) return;
+                        main.removeCallbacks(anim[0]);
+                        View row = (View) typing.getParent().getParent();
+                        chat.removeView(row);
+                        live[0] = addBubble(vis, false);
+                    } else {
+                        live[0].setText(vis);
+                        scrollDown();
+                    }
+                    for (String sn : ready) { spoke[0] = true; speakQueued(sn); }
+                });
+            });
             runOnUiThread(() -> {
                 main.removeCallbacks(anim[0]);
-                View row = (View) typing.getParent().getParent();
-                chat.removeView(row);
+                if (live[0] == null) {
+                    View row = (View) typing.getParent().getParent();
+                    chat.removeView(row);
+                }
                 statusText.setText(lang().online);
-                busy = false;
-                String txt = r.text == null || r.text.trim().isEmpty() ? AiClient.sorry() : r.text;
+                String txt = r.text == null || r.text.trim().isEmpty() ? (buf.text().trim().isEmpty() ? AiClient.sorry() : buf.text()) : r.text;
                 String shown = clean(actions.runTags(txt));
                 if (shown.isEmpty()) shown = "ठीक है! 👍";
                 Convo.add("assistant", shown);
-                addBot(shown);
-                speak(shown);
+                if (live[0] != null) { live[0].setText(shown); scrollDown(); }
+                else addBot(shown);
+                busy = false;
+                if (spoke[0]) {
+                    String rest = buf.flush();
+                    if (!rest.isEmpty()) speakQueued(rest);
+                    else if (tts == null || !tts.isSpeaking()) spoke(lastUtt);
+                } else {
+                    speak(shown);
+                }
             });
         });
     }
@@ -522,6 +573,19 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private void speak(String text) {
         if (isMuted() && !convMode) return; // conversation mode always speaks
         speakForce(text);
+    }
+
+    /** Adds a sentence to the speech queue (streamed replies start speaking before they are complete). */
+    private void speakQueued(String text) {
+        if (isMuted() && !convMode) return;
+        String s = text.replaceAll("https?://\\S+", "")
+                .replaceAll("[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{FE0F}\\x{200D}\\x{2B00}-\\x{2BFF}]", "")
+                .replace("*", "").replace("#", "").replace("•", "").trim();
+        if (s.isEmpty()) return;
+        if (!ttsReady || tts == null) { pendingSpeech = pendingSpeech == null ? s : pendingSpeech + " " + s; return; }
+        useVoiceFor(s);
+        lastUtt = "mitra" + (utter++);
+        tts.speak(s, TextToSpeech.QUEUE_ADD, null, lastUtt);
     }
 
     /** Called when an utterance finished: in conversation mode, listen again. */
