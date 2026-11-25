@@ -1,5 +1,5 @@
 # मित्र (Mitra) – आपका AI मित्र
-Hindi/Hinglish AI assistant app for Android by **PlayRang Technologies** (package `com.playrang.rangstudio`, **v3.0** — replaces the old Rang Studio video editor).
+Hindi/Hinglish AI assistant app for Android by **PlayRang Technologies** (package `com.playrang.rangstudio`, **v3.1** — replaces the old Rang Studio video editor).
 
 ## Features
 - **🎙️ Live बात (new in v3.0)** — ChatGPT-voice-style full-screen conversation with a big animated orb: just talk, Mitra answers in a natural voice, and you can interrupt it any time (barge-in). Uses the **Gemini Live API** (`gemini-3.8-live`, falling back to `gemini-3.1-flash-live-preview` / `gemini-2.5-flash-native-audio-preview-12-2025`) over a WebSocket with 16 kHz mic audio up and 24 kHz speech down, echo cancellation + noise suppression, live transcripts, Google Search grounding for current info, and **function calling** for phone tasks (call / WhatsApp / SMS by contact name, YouTube, open app, Google search, alarm, timer, maps, torch, camera, share, time). Needs the user's own free Gemini API key (Settings → AI इंजन; get one at aistudio.google.com). Without a key the same screen runs a fast turn-based loop (speech recognition → AI → speech → listens again). Mic mute + close buttons; choice of 5 Live voices.
@@ -10,8 +10,11 @@ Hindi/Hinglish AI assistant app for Android by **PlayRang Technologies** (packag
 - Phone actions (local Hindi/Hinglish/English commands + AI `[[ACTION:...]]` tags): YouTube पर वीडियो चलाना, ऐप/वेबसाइट खोलना, Google search, नंबर डायल, WhatsApp संदेश, अलार्म/टाइमर, नक्शा, कैमरा, टॉर्च, शेयर, समय/तारीख.
 - Fully native Android UI (no WebView, no remote website), pure Java, no extra libraries for Live (own tiny WebSocket client). No AccessibilityService; Mitra only opens apps with standard intents. No API key is stored in the code or repo.
 
+## Changelog
+- **v3.1** — Fix: the mic kept popping up with a repeated “tun-tun” beep. Always-listen now uses only the offline Vosk model (silent AudioRecord, no SpeechRecognizer loop; without the model it stays off and asks once to download it), the Google mic popup (RecognizerIntent) is never used, recognizer beeps are muted, empty listens back off (1 s → 3 s → stop), and wake word pauses with the screen off unless “स्क्रीन बंद पर भी सुनें” is on.
+
 ## Build
-Every push to `main` runs `.github/workflows/build-apk.yml`, which builds a **signed release APK** (`Mitra.apk`) and publishes it as a GitHub Release tagged `mitra-v3.0-build-N`.
+Every push to `main` runs `.github/workflows/build-apk.yml`, which builds a **signed release APK** (`Mitra.apk`) and publishes it as a GitHub Release tagged `mitra-v3.1-build-N`.
 Signing uses repository secrets `KEYSTORE_B64` (base64 PKCS12) and `KEYSTORE_PASS` (alias `mitra`). The keystore is never committed — keep a safe backup; every future update must be signed with the same key.
 
 > Users who have the old Rang Studio (v1, debug-signed) installed must uninstall it before installing Mitra, because the signing key changed.

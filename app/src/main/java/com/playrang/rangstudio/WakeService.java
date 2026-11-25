@@ -6,8 +6,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
@@ -16,15 +18,11 @@ import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -39,15 +37,20 @@ import java.util.Map;
 
 /**
  * Always-listening foreground service. Detects the wake word "मित्र" on the phone with an offline Vosk grammar
- * recognizer (audio never leaves the phone and is never saved). Falls back to Android's SpeechRecognizer when the
- * offline model is not downloaded yet. On a wake word it opens {@link VoiceActivity} (also over the lock screen).
+ * recognizer reading the mic silently with AudioRecord (audio never leaves the phone and is never saved). It never
+ * uses Android's SpeechRecognizer (that beeps on every start). Without the offline model it does not run at all:
+ * a one-time notification asks the user to download the model. Pauses while the screen is off unless the user turned
+ * on "स्क्रीन बंद पर भी सुनें". On a wake word it opens {@link LiveActivity}/{@link VoiceActivity}.
  */
 public class WakeService extends Service {
     static final String ACT_START = "com.playrang.rangstudio.WAKE_START", ACT_STOP = "com.playrang.rangstudio.WAKE_STOP",
             ACT_PAUSE = "com.playrang.rangstudio.WAKE_PAUSE", ACT_RESUME = "com.playrang.rangstudio.WAKE_RESUME";
     static final String CH_LISTEN = "mitra_listen", CH_WAKE = "mitra_wake";
-    static final int NOTIF_ID = 401, NOTIF_WAKE = 402;
+    static final int NOTIF_ID = 401, NOTIF_WAKE = 402, NOTIF_MODEL = 404;
     static final String PREF_ON = "always_listen";
+    static final String PREF_SCREEN_OFF = "listen_screen_off"; // "स्क्रीन बंद पर भी सुनें", default off
+    static final String PREF_MODEL_PROMPTED = "model_prompted";
+    static final String ACT_REFRESH = "com.playrang.rangstudio.WAKE_REFRESH";
 
     static volatile boolean running;
     private static final Map<String, Long> pauses = new HashMap<>(); // reason -> until (ms)
@@ -56,8 +59,9 @@ public class WakeService extends Service {
     private volatile boolean alive;
     private Thread voskThread;
     private PowerManager.WakeLock wl;
-    private SpeechRecognizer sr;
-    private boolean srMode, srListening;
+    private volatile boolean screenOn = true;
+    private static volatile boolean pauseDirty;
+    private BroadcastReceiver screenRx;
     private String lastState = "";
     private SharedPreferences prefs;
 
@@ -74,10 +78,35 @@ public class WakeService extends Service {
     }
 
     static void start(Context c) {
+        // Wake word runs only on the offline model; without it Mitra stays quiet and asks once to download it.
+        if (!ModelManager.ready(c)) { promptModel(c, false); return; }
         Intent i = new Intent(c, WakeService.class).setAction(ACT_START);
         try {
             if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i); else c.startService(i);
         } catch (Exception ignored) { }
+    }
+
+    /** One-time (or forced) notification: download the offline voice model in Settings to turn on the wake word. */
+    static void promptModel(Context c, boolean force) {
+        SharedPreferences p = c.getSharedPreferences("mitra", MODE_PRIVATE);
+        if (!force && p.getBoolean(PREF_MODEL_PROMPTED, false)) return;
+        p.edit().putBoolean(PREF_MODEL_PROMPTED, true).apply();
+        channels(c);
+        int fl = Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT : PendingIntent.FLAG_UPDATE_CURRENT;
+        PendingIntent pi = PendingIntent.getActivity(c, 6, new Intent(c, WakeSetupActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), fl);
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(c, CH_LISTEN) : new Notification.Builder(c);
+        b.setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("‘मित्र’ सुनने के लिए आवाज़ मॉडल चाहिए")
+                .setContentText("एक बार मॉडल डाउनलोड करें (~44 MB) — तब तक ‘हमेशा सुनें’ बंद है। यहाँ टैप करें।")
+                .setStyle(new Notification.BigTextStyle().bigText("‘मित्र’ शब्द फ़ोन पर ही, बिना आवाज़/बीप के पहचानने के लिए एक बार ऑफ़लाइन आवाज़ मॉडल (~44 MB) डाउनलोड करें। तब तक ‘हमेशा सुनें’ बंद रहेगा। यहाँ टैप करें।"))
+                .setAutoCancel(true).setContentIntent(pi);
+        try { ((NotificationManager) c.getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_MODEL, b.build()); } catch (Exception ignored) { }
+    }
+
+    /** Re-read settings (e.g. "स्क्रीन बंद पर भी सुनें" changed). */
+    static void refresh(Context c) {
+        pauseDirty = true;
+        if (running) send(c, ACT_REFRESH);
     }
 
     static void stop(Context c) {
@@ -87,12 +116,12 @@ public class WakeService extends Service {
     /** Pause listening for a reason ("ui", "voice"); ms <= 0 means until resume(). */
     static void pause(Context c, String why, long ms) {
         synchronized (pauses) { pauses.put(why, ms <= 0 ? Long.MAX_VALUE : System.currentTimeMillis() + ms); }
-        if (running) send(c, ACT_PAUSE);
+        pauseDirty = true; // the Vosk loop releases the mic within ~100 ms
     }
 
     static void resume(Context c, String why) {
         synchronized (pauses) { pauses.remove(why); }
-        if (running) send(c, ACT_RESUME);
+        pauseDirty = true;
     }
 
     private static void send(Context c, String action) {
@@ -109,6 +138,7 @@ public class WakeService extends Service {
     /** @return the pause reason, or null when we should listen */
     private String pausedWhy() {
         if (inCall()) return "call";
+        if (!screenOn && !prefs.getBoolean(PREF_SCREEN_OFF, false)) return "screen";
         long now = System.currentTimeMillis();
         synchronized (pauses) {
             String r = null;
@@ -127,6 +157,29 @@ public class WakeService extends Service {
         super.onCreate();
         prefs = getSharedPreferences("mitra", MODE_PRIVATE);
         channels(this);
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            screenOn = pm == null || pm.isInteractive();
+        } catch (Exception ignored) { }
+        screenRx = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                screenOn = !Intent.ACTION_SCREEN_OFF.equals(i.getAction());
+                pauseDirty = true;
+                updateWakeLock();
+            }
+        };
+        IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+        f.addAction(Intent.ACTION_SCREEN_ON);
+        try { registerReceiver(screenRx, f); } catch (Exception ignored) { }
+    }
+
+    /** Hold the CPU awake only while we actually listen; with the screen off (and the setting off) let the phone sleep. */
+    private void updateWakeLock() {
+        boolean need = alive && (screenOn || prefs.getBoolean(PREF_SCREEN_OFF, false));
+        try {
+            if (need) acquireWakeLock();
+            else if (wl != null && wl.isHeld()) wl.release();
+        } catch (Exception ignored) { }
     }
 
     static void channels(Context c) {
@@ -154,13 +207,19 @@ public class WakeService extends Service {
             if (!goForeground("मित्र सुन रहा है… 'मित्र' बोलें")) { stopSelf(); return START_NOT_STICKY; }
         }
         if (!running) {
+            if (!ModelManager.ready(this)) {
+                // No offline model: never fall back to the beeping SpeechRecognizer loop.
+                promptModel(this, false);
+                stopForegroundCompat();
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             running = true;
             alive = true;
-            acquireWakeLock();
-            begin();
+            updateWakeLock();
+            startVosk();
         }
-        if (ACT_RESUME.equals(a) && srMode) main.postDelayed(this::srListen, 400);
-        if (ACT_PAUSE.equals(a) && srMode) srStop();
+        if (ACT_REFRESH.equals(a)) { pauseDirty = true; updateWakeLock(); }
         return START_STICKY;
     }
 
@@ -205,9 +264,11 @@ public class WakeService extends Service {
     private void acquireWakeLock() {
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Mitra:wake");
-            wl.setReferenceCounted(false);
-            wl.acquire();
+            if (wl == null) {
+                wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Mitra:wake");
+                wl.setReferenceCounted(false);
+            }
+            if (!wl.isHeld()) wl.acquire();
         } catch (Exception ignored) { }
     }
 
@@ -216,29 +277,14 @@ public class WakeService extends Service {
         alive = false;
         running = false;
         main.removeCallbacksAndMessages(null);
-        srStop();
-        if (sr != null) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }
+        if (screenRx != null) { try { unregisterReceiver(screenRx); } catch (Exception ignored) { } screenRx = null; }
         if (voskThread != null) voskThread.interrupt();
         try { if (wl != null && wl.isHeld()) wl.release(); } catch (Exception ignored) { }
         super.onDestroy();
     }
 
-    // ------------------------------------------------------------------ engine choice
-    private void begin() {
-        if (ModelManager.ready(this)) { startVosk(); return; }
-        // No offline model yet: listen with the Android recognizer and fetch the model in the background.
-        startSr();
-        if (!ModelManager.isDownloading()) {
-            new Thread(() -> {
-                String err = ModelManager.download(this, (pct, msg) -> { if (srMode) state("मित्र सुन रहा है… (ऑफ़लाइन मॉडल " + pct + "%)"); });
-                if (err == null && alive) main.post(() -> { srMode = false; srStop(); if (sr != null) { sr.destroy(); sr = null; } startVosk(); });
-            }, "mitra-model").start();
-        }
-    }
-
     // ------------------------------------------------------------------ offline (Vosk) detector
     private void startVosk() {
-        srMode = false;
         voskThread = new Thread(this::voskLoop, "mitra-wake");
         voskThread.start();
     }
@@ -248,7 +294,8 @@ public class WakeService extends Service {
         try {
             model = new Model(ModelManager.dir(this).getAbsolutePath());
         } catch (Throwable e) {
-            main.post(() -> { ModelManager.deleteAll(ModelManager.dir(this)); startSr(); });
+            // broken model files: delete them, ask (again) for a fresh download and stay off
+            main.post(() -> { ModelManager.deleteAll(ModelManager.dir(this)); promptModel(this, true); stopForegroundCompat(); stopSelf(); });
             return;
         }
         final int rate = 16000;
@@ -263,13 +310,16 @@ public class WakeService extends Service {
         try {
             while (alive && !Thread.currentThread().isInterrupted()) {
                 long now = System.currentTimeMillis();
-                if (now - lastCheck > 700 || paused) {
+                if (now - lastCheck > 700 || paused || pauseDirty) {
                     lastCheck = now;
+                    pauseDirty = false;
                     String why = pausedWhy();
                     if (why != null) {
                         if (!paused) { paused = true; if (rec != null) { rec.stop(); rec.release(); rec = null; } }
-                        state("call".equals(why) ? "मित्र रुका है — कॉल चल रही है" : "मित्र रुका है — ऐप में बात हो रही है");
-                        Thread.sleep(500);
+                        state("call".equals(why) ? "मित्र रुका है — कॉल चल रही है"
+                                : "screen".equals(why) ? "मित्र रुका है — स्क्रीन बंद है (बैटरी बचत)"
+                                : "मित्र रुका है — ऐप में बात हो रही है");
+                        Thread.sleep("screen".equals(why) ? 1500 : 300);
                         continue;
                     }
                     if (paused) {
@@ -359,89 +409,6 @@ public class WakeService extends Service {
         }
         if (full.isEmpty()) return "";
         return WakeWord.evaluate(rel, full, thr);
-    }
-
-    // ------------------------------------------------------------------ fallback: Android SpeechRecognizer loop
-    private int srErrors;
-
-    private void startSr() {
-        srMode = true;
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) { state("मित्र: आवाज़ पहचान उपलब्ध नहीं — मॉडल डाउनलोड का इंतज़ार"); return; }
-        state("मित्र सुन रहा है… 'मित्र' बोलें");
-        srListen();
-    }
-
-    private void srListen() {
-        if (!alive || !srMode || srListening) return;
-        String why = pausedWhy();
-        if (why != null) {
-            state("call".equals(why) ? "मित्र रुका है — कॉल चल रही है" : "मित्र रुका है — ऐप में बात हो रही है");
-            main.postDelayed(this::srListen, 1500);
-            return;
-        }
-        state("मित्र सुन रहा है… 'मित्र' बोलें");
-        try {
-            if (sr == null) {
-                sr = SpeechRecognizer.createSpeechRecognizer(this);
-                sr.setRecognitionListener(new SrListener());
-            }
-            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "hi-IN");
-            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-            i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
-            srListening = true;
-            sr.startListening(i);
-        } catch (Exception e) {
-            srListening = false;
-            main.postDelayed(this::srListen, 3000);
-        }
-    }
-
-    private void srStop() {
-        srListening = false;
-        try { if (sr != null) sr.cancel(); } catch (Exception ignored) { }
-    }
-
-    private class SrListener implements RecognitionListener {
-        public void onReadyForSpeech(Bundle p) { }
-        public void onBeginningOfSpeech() { }
-        public void onRmsChanged(float v) { }
-        public void onBufferReceived(byte[] b) { }
-        public void onEndOfSpeech() { }
-        public void onPartialResults(Bundle b) { }
-        public void onEvent(int t, Bundle p) { }
-        public void onError(int error) {
-            srListening = false;
-            long delay = 250;
-            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
-                srErrors++;
-                delay = Math.min(10000, 1000L * srErrors);
-                if (sr != null && srErrors % 3 == 0) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }
-            } else if (error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
-                    || error == SpeechRecognizer.ERROR_SERVER) {
-                delay = 5000;
-            } else if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-                stopSelf();
-                return;
-            }
-            main.postDelayed(WakeService.this::srListen, delay);
-        }
-        public void onResults(Bundle b) {
-            srListening = false;
-            srErrors = 0;
-            ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (r != null) for (String t : r) {
-                String cmd = WakeWord.split(t);
-                if (cmd != null) {
-                    pause(WakeService.this, "voice", 20000);
-                    onWake(cmd);
-                    return;
-                }
-            }
-            main.postDelayed(WakeService.this::srListen, 150);
-        }
     }
 
     // ------------------------------------------------------------------ wake

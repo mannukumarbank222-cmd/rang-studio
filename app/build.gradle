@@ -7,8 +7,8 @@ android {
     minSdk 24
     targetSdk 34
     ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
-    versionCode 5
-    versionName '3.0'
+    versionCode 6
+    versionName '3.1'
   }
   signingConfigs {
     release {

@@ -215,7 +215,7 @@ public class SettingsActivity extends Activity {
         // Always listen (wake word)
         LinearLayout wake = card();
         wake.addView(text("हमेशा सुनें (‘मित्र’ बोलकर जगाएँ)", 16, Ui.TEXT, true));
-        wake.addView(text("स्क्रीन बंद या फ़ोन लॉक हो तब भी ‘मित्र’ बोलिए और सवाल पूछिए। ‘मित्र’ शब्द फ़ोन पर ही पहचाना जाता है, आवाज़ रिकॉर्ड/अपलोड नहीं होती। "
+        wake.addView(text("‘मित्र’ बोलिए और सवाल पूछिए (फ़ोन लॉक हो तब भी)। ‘मित्र’ शब्द फ़ोन पर ही, चुपचाप (बिना बीप) पहचाना जाता है, आवाज़ रिकॉर्ड/अपलोड नहीं होती। "
                 + "बैटरी थोड़ी ज़्यादा लगती है और एक नोटिफ़िकेशन दिखता है।", 13.5f, Ui.MUTED, false));
         wakeSwitch = new Switch(this);
         wakeSwitch.setText("हमेशा सुनें");
@@ -234,6 +234,22 @@ public class SettingsActivity extends Activity {
             }
         });
         wake.addView(wakeSwitch);
+        if (!ModelManager.ready(this)) {
+            wake.addView(text("⚠️ ‘मित्र’ सुनने के लिए एक बार ऑफ़लाइन आवाज़ मॉडल (~44 MB) डाउनलोड करें — नीचे ‘सेटअप’ दबाएँ। तब तक ‘हमेशा सुनें’ बंद रहेगा।",
+                    13f, Ui.SAFFRON_DARK, false));
+        }
+        Switch screenOff = new Switch(this);
+        screenOff.setText("स्क्रीन बंद पर भी सुनें");
+        screenOff.setTextSize(15);
+        screenOff.setTextColor(Ui.TEXT);
+        screenOff.setPadding(0, dp(8), 0, dp(2));
+        screenOff.setChecked(prefs.getBoolean(WakeService.PREF_SCREEN_OFF, false));
+        screenOff.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> {
+            prefs.edit().putBoolean(WakeService.PREF_SCREEN_OFF, on).apply();
+            WakeService.refresh(this);
+        });
+        wake.addView(screenOff);
+        wake.addView(text("बंद रहने पर (बैटरी बचत) मित्र सिर्फ़ स्क्रीन चालू होने पर ‘मित्र’ सुनता है।", 12.5f, Ui.MUTED, false));
         TextView setup = button("🛠️ सेटअप (बैटरी, Autostart, मॉडल)", false);
         setup.setOnClickListener(x -> startActivity(new Intent(this, WakeSetupActivity.class)));
         LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

@@ -15,7 +15,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -75,7 +74,9 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     private boolean ttsReady, liteMuted, liteBusy, liteListening;
     private SpeechRecognizer sr;
     private String lastUtt;
-    private int utter, misses;
+    private int utter;
+    private final ListenBackoff backoff = new ListenBackoff();
+    private SilentMic quiet;
     private final List<String> pendingSpeech = new ArrayList<>();
 
     private Lang lang() { return Lang.get(prefs.getString("lang", "auto")); }
@@ -247,7 +248,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
             muteBtn.setText(liteMuted ? "🔇" : "🎤");
             muteBtn.setBackground(Ui.round(liteMuted ? Color.parseColor("#5A4A40") : Color.parseColor("#2A211C"), dp(34)));
             if (liteMuted) { stopListening(); orb.setMode(OrbView.MUTED); status.setText("माइक बंद है"); }
-            else if (!liteBusy && (tts == null || !tts.isSpeaking())) listen();
+            else if (!liteBusy && (tts == null || !tts.isSpeaking())) { backoff.reset(); listen(); }
         }
     }
 
@@ -256,7 +257,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
             if (session != null) session.stopSpeaking(); // tap = "रुको", like barge-in
         } else if (!liteListening && !liteMuted) {
             if (tts != null) tts.stop();
-            misses = 0;
+            backoff.reset();
             listen();
         }
     }
@@ -555,25 +556,36 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
                 sr.setRecognitionListener(new L());
             }
-            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang().sr);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang().sr);
-            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
+            Intent i = SilentMic.intent(lang().sr, 1);
             liteListening = true;
             status.setText("सुन रहा हूँ… बोलिए");
             orb.setMode(OrbView.LISTEN);
+            if (quiet == null) quiet = new SilentMic(this);
+            quiet.mute(tts != null && tts.isSpeaking());
             sr.startListening(i);
         } catch (Exception e) {
             liteListening = false;
+            if (quiet != null) quiet.unmuteNow();
         }
     }
 
     private void stopListening() {
+        boolean was = liteListening;
         liteListening = false;
         try { if (sr != null) sr.cancel(); } catch (Exception ignored) { }
+        if (was && quiet != null) quiet.unmuteSoon();
+    }
+
+    /** Heard nothing: wait 1 s, then 3 s, then stop and wait for an orb tap (no endless restarts / beeps). */
+    private void emptyTry() {
+        long d = backoff.onEmpty();
+        if (d == ListenBackoff.STOP) {
+            status.setText("बोलने के लिए orb दबाइए");
+            orb.setMode(OrbView.IDLE);
+            return;
+        }
+        status.setText("…");
+        main.postDelayed(LiveActivity.this::listen, d);
     }
 
     private class L implements RecognitionListener {
@@ -590,25 +602,28 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         public void onError(int error) {
             boolean was = liteListening;
             liteListening = false;
+            if (quiet != null) quiet.unmuteSoon();
             if (!was || live || destroyed) return;
-            if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && misses++ < 3) {
-                main.postDelayed(LiveActivity.this::listen, 250);
+            if (SilentMic.retryOnline(error)) { main.postDelayed(LiveActivity.this::listen, 300); return; }
+            if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                emptyTry();
                 return;
             }
             if (error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT) reply.setText("इंटरनेट जाँचिए।");
-            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) {
-                main.postDelayed(LiveActivity.this::listen, 600);
-                return;
+            if ((error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT) && !backoff.stopped()) {
+                long d = backoff.onEmpty();
+                if (d != ListenBackoff.STOP) { main.postDelayed(LiveActivity.this::listen, d); return; }
             }
-            status.setText("गोले को छूकर बोलिए");
+            status.setText("बोलने के लिए orb दबाइए");
             orb.setMode(OrbView.IDLE);
         }
         public void onResults(Bundle b) {
             liteListening = false;
-            misses = 0;
+            if (quiet != null) quiet.unmuteSoon();
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             String t = r == null || r.isEmpty() ? "" : r.get(0).trim();
-            if (t.isEmpty()) { listen(); return; }
+            if (t.isEmpty()) { emptyTry(); return; }
+            backoff.reset();
             String w = WakeWord.split(t);
             if (w != null && w.isEmpty()) { speakThenListen("जी, बोलिए"); return; }
             if (w != null) t = w;
@@ -657,7 +672,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     @Override
     protected void onResume() {
         super.onResume();
-        if (started && !live && !liteListening && !liteBusy && tts != null && !tts.isSpeaking() && !leftForAction) main.postDelayed(this::listen, 500);
+        if (started && !live && !liteListening && !liteBusy && tts != null && !tts.isSpeaking() && !leftForAction && !backoff.stopped()) main.postDelayed(this::listen, 500);
     }
 
     @Override
@@ -672,6 +687,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     protected void onDestroy() {
         destroyed = true;
         main.removeCallbacksAndMessages(null);
+        if (quiet != null) quiet.unmuteNow();
         if (session != null) { session.stop(); session = null; }
         if (sr != null) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }
         if (tts != null) { tts.stop(); tts.shutdown(); }

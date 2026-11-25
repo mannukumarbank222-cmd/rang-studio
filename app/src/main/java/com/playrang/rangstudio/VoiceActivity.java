@@ -16,7 +16,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -56,7 +55,9 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     private int utter;
     private SpeechRecognizer sr;
     private boolean listening, busy, leftForAction, destroyed;
-    private int heardNothing;
+    private final ListenBackoff backoff = new ListenBackoff();
+    private SilentMic quiet;
+    private long lastSilenceMs = 8000;
 
     private TextView status, heard, answer, micBtn;
     private LinearLayout choiceBox;
@@ -89,6 +90,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     private void handle(Intent i) {
         String cmd = i == null ? null : i.getStringExtra(EXTRA_CMD);
         leftForAction = false;
+        backoff.reset();
         if (cmd != null && cmd.trim().length() > 0) process(cmd.trim());
         else {
             tone();
@@ -155,7 +157,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         row.setGravity(Gravity.CENTER);
         row.setPadding(0, dp(10), 0, 0);
         micBtn = pill("🎤 बोलिए", true);
-        micBtn.setOnClickListener(v -> { if (listening) stopListening(); else { if (tts != null) tts.stop(); listen(8000); } });
+        micBtn.setOnClickListener(v -> { if (listening) stopListening(); else { if (tts != null) tts.stop(); backoff.reset(); listen(8000); } });
         TextView chat = pill("💬 चैट खोलें", false);
         chat.setOnClickListener(v -> {
             startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -326,29 +328,39 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
                 sr.setRecognitionListener(new L());
             }
-            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang().sr);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang().sr);
-            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+            Intent i = SilentMic.intent(lang().sr, 1);
             listening = true;
+            lastSilenceMs = silenceMs;
             status.setText("🎙️ सुन रहा हूँ…");
             micBtn.setText("■ रोकें");
+            if (quiet == null) quiet = new SilentMic(this);
+            quiet.mute(tts != null && tts.isSpeaking());
             sr.startListening(i);
             main.removeCallbacks(silenceTimeout);
             main.postDelayed(silenceTimeout, silenceMs);
         } catch (Exception e) {
             listening = false;
+            if (quiet != null) quiet.unmuteNow();
             micBtn.setText("🎤 बोलिए");
         }
     }
 
     private void stopListening() {
         main.removeCallbacks(silenceTimeout);
+        boolean was = listening;
         listening = false;
         if (micBtn != null) micBtn.setText("🎤 बोलिए");
         try { if (sr != null) sr.cancel(); } catch (Exception ignored) { }
+        if (was && quiet != null) quiet.unmuteSoon();
+    }
+
+    /** Heard nothing: try again after 1 s, then 3 s, then stop (no endless restarts / beeps). @return true if retrying */
+    private boolean retryAfterSilence() {
+        long d = backoff.onEmpty();
+        if (d == ListenBackoff.STOP) { status.setText("बोलने के लिए 🎤 दबाइए"); return false; }
+        final long ms = lastSilenceMs;
+        main.postDelayed(() -> { if (!destroyed && !busy && !listening && (tts == null || !tts.isSpeaking())) listen(ms); }, d);
+        return true;
     }
 
     private class L implements RecognitionListener {
@@ -366,11 +378,8 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
             boolean wasListening = listening;
             stopListening();
             if (!wasListening) return;
-            if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && heardNothing++ < 1
-                    && "जी, बोलिए…".contentEquals(status.getText())) {
-                listen(6000);
-                return;
-            }
+            if (SilentMic.retryOnline(error)) { listen(lastSilenceMs); return; }
+            if ((error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) && retryAfterSilence()) return;
             if (error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT) {
                 answer.setText("इंटरनेट जाँचिए, आवाज़ पहचानने के लिए नेटवर्क चाहिए।");
             }
@@ -380,7 +389,8 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
             stopListening();
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             String t = r == null || r.isEmpty() ? "" : r.get(0).trim();
-            if (t.isEmpty()) { idle(); return; }
+            if (t.isEmpty()) { if (!retryAfterSilence()) idle(); return; }
+            backoff.reset();
             String w = WakeWord.split(t); // "मित्र, ..." said again in a follow-up
             if (w != null) t = w.isEmpty() ? t : w;
             if (w != null && w.isEmpty()) { speak("जी, बोलिए", () -> listen(8000)); return; }
@@ -425,6 +435,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     protected void onDestroy() {
         destroyed = true;
         main.removeCallbacksAndMessages(null);
+        if (quiet != null) quiet.unmuteNow();
         if (sr != null) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }
         if (tts != null) { tts.stop(); tts.shutdown(); }
         exec.shutdown();

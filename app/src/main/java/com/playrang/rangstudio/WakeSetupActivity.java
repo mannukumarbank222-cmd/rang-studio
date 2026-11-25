@@ -163,7 +163,7 @@ public class WakeSetupActivity extends Activity {
         overlayState.setText(ov ? "✅ दूसरे ऐप्स के ऊपर दिखाने की अनुमति है" : "❌ दूसरे ऐप्स के ऊपर दिखाने की अनुमति नहीं (लॉक स्क्रीन पर जवाब के लिए ज़रूरी)");
         if (!ModelManager.isDownloading()) {
             boolean ready = ModelManager.ready(this);
-            modelState.setText(ready ? "✅ मॉडल तैयार है — ‘मित्र’ फ़ोन पर ही पहचाना जाएगा" : "मॉडल नहीं है — तब तक Google आवाज़-पहचान से सुनेगा (इंटरनेट चाहिए)");
+            modelState.setText(ready ? "✅ मॉडल तैयार है — ‘मित्र’ फ़ोन पर ही पहचाना जाएगा" : "⚠️ मॉडल नहीं है — एक बार डाउनलोड करें (~44 MB)। तब तक ‘हमेशा सुनें’ बंद रहेगा।");
             bar.setProgress(ready ? 100 : 0);
         }
         if (toggle.isChecked() != WakeService.enabled(this)) toggle.setChecked(WakeService.enabled(this));
@@ -173,9 +173,14 @@ public class WakeSetupActivity extends Activity {
     private void enable() {
         if (!WakeService.hasMic(this)) { enableAfterPerms = true; askPerms(true); return; }
         prefs.edit().putBoolean(WakeService.PREF_ON, true).apply();
-        WakeService.start(this);
-        Toast.makeText(this, "हमेशा सुनें चालू ✅ — ‘मित्र’ बोलकर देखें", Toast.LENGTH_LONG).show();
-        if (!ModelManager.ready(this)) downloadModel();
+        if (ModelManager.ready(this)) {
+            WakeService.start(this);
+            Toast.makeText(this, "हमेशा सुनें चालू ✅ — ‘मित्र’ बोलकर देखें", Toast.LENGTH_LONG).show();
+        } else {
+            // the wake word needs the offline model; it starts by itself when the download finishes
+            Toast.makeText(this, "आवाज़ मॉडल डाउनलोड हो रहा है — पूरा होते ही ‘हमेशा सुनें’ चालू हो जाएगा", Toast.LENGTH_LONG).show();
+            downloadModel();
+        }
     }
 
     private void disable() {
@@ -219,7 +224,11 @@ public class WakeSetupActivity extends Activity {
                 if (err != null) { modelState.setText("❌ " + err); return; }
                 modelState.setText("✅ मॉडल तैयार है — ‘मित्र’ फ़ोन पर ही पहचाना जाएगा");
                 bar.setProgress(100);
-                if (WakeService.enabled(this) && WakeService.hasMic(this)) { WakeService.stop(this); WakeService.start(this); }
+                try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(WakeService.NOTIF_MODEL); } catch (Exception ignored) { }
+                if (WakeService.enabled(this) && WakeService.hasMic(this)) {
+                    WakeService.stop(this); WakeService.start(this);
+                    Toast.makeText(this, "हमेशा सुनें चालू ✅ — ‘मित्र’ बोलकर देखें", Toast.LENGTH_LONG).show();
+                }
             });
         }, "mitra-model-ui").start();
     }

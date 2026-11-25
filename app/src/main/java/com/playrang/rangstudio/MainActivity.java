@@ -15,7 +15,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -50,7 +49,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     static final String GREETING = "नमस्ते, मैं मित्र हूँ, आपका मित्र। आप मुझसे कोई भी सवाल पूछ सकते हैं और कुछ भी काम करा सकते हैं।";
     static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "आज की तारीख", "मुझे एक चुटकुला सुनाओ", "WhatsApp खोलो",
             "सुबह 6 बजे का अलार्म लगाओ", "टॉर्च जलाओ", "अभी कितने बजे हैं?", "पढ़ाई में मन कैसे लगाएं?"};
-    private static final int REQ_MIC = 7, REQ_SPEECH = 42;
+    private static final int REQ_MIC = 7;
     static final String EXTRA_START_WAKE = "start_wake";
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -69,7 +68,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private boolean listening;
     private boolean busy;
     private boolean convMode, resumed;
-    private int convMisses;
+    private final ListenBackoff convBackoff = new ListenBackoff();
+    private SilentMic quiet;
     private String lastUtt;
     private int utter;
 
@@ -597,7 +597,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     // ------------------------------------------------------------------ conversation mode ("बातचीत मोड")
     private void startConversation() {
         convMode = true;
-        convMisses = 0;
+        convBackoff.reset();
         WakeService.pause(this, "ui", 0);
         convBtn.setText("⏹️");
         convBtn.setBackground(Ui.round(Color.parseColor("#33FFFFFF"), dp(20)));
@@ -653,16 +653,10 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     }
 
     // ------------------------------------------------------------------ speech input
+    /** In-app recognizer only (never the Google popup), quiet and preferring on-device recognition. */
     private Intent recognizerIntent() {
-        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        String sl = lang().sr;
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, sl);
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, sl);
+        Intent i = SilentMic.intent(lang().sr, 1);
         i.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", new String[]{"hi-IN", "en-IN"});
-        i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-        i.putExtra(RecognizerIntent.EXTRA_PROMPT, lang().listening);
         return i;
     }
 
@@ -672,7 +666,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
             return;
         }
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) { fallbackRecognizer(); return; }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) { noRecognizer(); return; }
         try {
             if (sr == null) {
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
@@ -683,11 +677,14 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             input.setHint(lang().listening);
             statusText.setText("सुन रहा है…");
             updateButtons();
+            if (quiet == null) quiet = new SilentMic(this);
+            quiet.mute(tts != null && tts.isSpeaking());
             sr.startListening(recognizerIntent());
         } catch (Exception e) {
             listening = false;
+            if (quiet != null) quiet.unmuteNow();
             updateButtons();
-            fallbackRecognizer();
+            noRecognizer();
         }
     }
 
@@ -704,16 +701,14 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         updateButtons();
     }
 
-    private void fallbackRecognizer() {
-        try {
-            startActivityForResult(recognizerIntent(), REQ_SPEECH);
-        } catch (Exception e) {
-            Toast.makeText(this, "इस फ़ोन में आवाज़ पहचानने की सुविधा नहीं मिली। Google ऐप इंस्टॉल/अपडेट करें।", Toast.LENGTH_LONG).show();
-        }
+    /** No popup fallback any more (the Google mic dialog kept appearing): just tell the user. */
+    private void noRecognizer() {
+        if (convMode) endConversation(true);
+        Toast.makeText(this, "इस फ़ोन में आवाज़ पहचानने की सुविधा नहीं मिली। Google ऐप इंस्टॉल/अपडेट करें, या लिखकर पूछिए।", Toast.LENGTH_LONG).show();
     }
 
     private class Listener implements RecognitionListener {
-        public void onReadyForSpeech(Bundle p) { }
+        public void onReadyForSpeech(Bundle p) { } // stay muted until the session ends so the stop beep is silent too
         public void onBeginningOfSpeech() { }
         public void onRmsChanged(float v) {
             if (listening) micBtn.setScaleX(1f + Math.min(Math.max(v, 0f), 10f) / 40f);
@@ -723,10 +718,13 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         public void onEndOfSpeech() { micBtn.setScaleX(1f); micBtn.setScaleY(1f); }
         public void onError(int error) {
             micBtn.setScaleX(1f); micBtn.setScaleY(1f);
+            if (quiet != null) quiet.unmuteSoon();
             endListeningUi();
+            if (SilentMic.retryOnline(error)) { main.postDelayed(MainActivity.this::startListening, 300); return; }
             if (convMode && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-                if (++convMisses >= 3) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
-                else main.postDelayed(MainActivity.this::convListen, 300);
+                long d = convBackoff.onEmpty();
+                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
+                else main.postDelayed(MainActivity.this::convListen, d);
                 return;
             }
             if (convMode && (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY || error == SpeechRecognizer.ERROR_CLIENT)) {
@@ -740,17 +738,24 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             } else if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
                 Toast.makeText(MainActivity.this, "एक पल रुकिए, फिर 🎤 दबाइए।", Toast.LENGTH_SHORT).show();
             } else {
-                if (sr != null) { sr.destroy(); sr = null; }
-                fallbackRecognizer();
+                // unknown recognizer error: recreate it next time, never open the Google popup
+                if (sr != null) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }
+                if (convMode) endConversation(true);
+                Toast.makeText(MainActivity.this, "आवाज़ पहचान में दिक्कत आई, फिर से 🎤 दबाइए।", Toast.LENGTH_SHORT).show();
             }
         }
         public void onResults(Bundle results) {
             micBtn.setScaleX(1f); micBtn.setScaleY(1f);
+            if (quiet != null) quiet.unmuteSoon();
             endListeningUi();
             ArrayList<String> r = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             input.setText("");
-            if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) { convMisses = 0; submit(r.get(0).trim()); }
-            else if (convMode) main.postDelayed(MainActivity.this::convListen, 300);
+            if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) { convBackoff.reset(); submit(r.get(0).trim()); }
+            else if (convMode) {
+                long d = convBackoff.onEmpty();
+                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
+                else main.postDelayed(MainActivity.this::convListen, d);
+            }
         }
         public void onPartialResults(Bundle partial) {
             ArrayList<String> r = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
@@ -766,16 +771,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (actions.onPermissionResult(code, ok)) return;
         if (code == REQ_MIC) {
             if (res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED) startListening();
-            else fallbackRecognizer();
-        }
-    }
-
-    @Override
-    protected void onActivityResult(int req, int result, Intent data) {
-        super.onActivityResult(req, result, data);
-        if (req == REQ_SPEECH && result == RESULT_OK && data != null) {
-            ArrayList<String> r = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-            if (r != null && !r.isEmpty()) submit(r.get(0));
+            else Toast.makeText(this, "माइक की अनुमति के बिना बोलकर नहीं पूछ सकते — लिखकर पूछिए।", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -804,12 +800,14 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         super.onPause();
         resumed = false;
         if (listening) stopListening();
+        if (quiet != null) quiet.unmuteNow();
         WakeService.resume(this, "ui");
     }
 
     @Override
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
+        if (quiet != null) quiet.unmuteNow();
         if (sr != null) { sr.destroy(); sr = null; }
         if (tts != null) { tts.stop(); tts.shutdown(); }
         exec.shutdownNow();

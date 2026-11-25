@@ -40,7 +40,7 @@ jobs:
         with: { name: Mitra-APK, path: Mitra.apk }
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: mitra-v3.0-build-${{ github.run_number }}
-          name: Mitra v3.0 (build ${{ github.run_number }})
-          body: "Mitra v3.0 - 🎙️ Live बात: ChatGPT जैसी live आवाज़ वाली बातचीत (Gemini Live, बीच में टोक सकते हैं, खुद कॉल/WhatsApp/YouTube/अलार्म जैसे काम करता है, Google Search से ताज़ा जानकारी)। Live के लिए सेटिंग्स में अपनी मुफ़्त Gemini key डालें। तेज़ चैट (जवाब लिखते-लिखते बोलना)। Signed with the same key as v2.x, installs as an update."
+          tag_name: mitra-v3.1-build-${{ github.run_number }}
+          name: Mitra v3.1 (build ${{ github.run_number }})
+          body: "Mitra v3.1 - 🔇 बार-बार माइक/‘टुन-टुन’ बीप ठीक: ‘हमेशा सुनें’ अब सिर्फ़ ऑफ़लाइन मॉडल से चुपचाप सुनता है (Google mic का बार-बार चालू होना बंद), Google mic popup कभी नहीं खुलता, बोलते समय बीप की आवाज़ दबाई जाती है, कुछ न सुनाई दे तो 1s/3s रुककर 3 बार के बाद रुक जाता है। बैटरी बचत: स्क्रीन बंद पर सुनना रुकता है (सेटिंग्स में ‘स्क्रीन बंद पर भी सुनें’)। पहली बार सेटिंग्स › हमेशा सुनें › सेटअप में आवाज़ मॉडल (~44 MB) डाउनलोड करें। Signed with the same key, installs as an update."
           files: Mitra.apk
