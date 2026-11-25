@@ -78,6 +78,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     private final ListenBackoff backoff = new ListenBackoff();
     private SilentMic quiet;
     private final List<String> pendingSpeech = new ArrayList<>();
+    private final SilentMic.EarlyStop early = new SilentMic.EarlyStop();
+    private boolean fromWake, userSpoke;
 
     private Lang lang() { return Lang.get(prefs.getString("lang", "auto")); }
     private int dp(float v) { return Ui.dp(this, v); }
@@ -95,7 +97,10 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         setVolumeControlStream(AudioManager.STREAM_VOICE_CALL);
         actions = new ActionHandler(this, this, exec);
         firstCmd = getIntent() == null ? null : getIntent().getStringExtra(EXTRA_CMD);
+        fromWake = getIntent() != null && getIntent().hasExtra(EXTRA_CMD);
+        if (firstCmd != null && firstCmd.trim().length() > 0) userSpoke = true;
         buildUi();
+        initTts(); // pre-warm: ready at once if Live falls back to the turn-based mode
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             status.setText("माइक की अनुमति दीजिए");
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
@@ -283,10 +288,16 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
          .append("फ़ोन के काम खुद करो: कॉल, WhatsApp, SMS, YouTube पर गाना, ऐप खोलना, अलार्म, टाइमर, टॉर्च, नक्शा, कैमरा, Google खोज — इनके लिए दिए गए functions तुरंत बुलाओ। ")
          .append("फ़ोन अपने कॉन्टैक्ट्स खुद ढूँढ लेता है, इसलिए कभी मत कहो 'मुझे नंबर नहीं पता' या 'मैं कॉल नहीं कर सकता' — नाम यूज़र के ही शब्दों में दो ('को/ko' हटाकर)। ")
          .append("function का जवाब आने पर एक छोटा वाक्य बोलो, जैसे 'ठीक है, सोनू को कॉल लगा रहा हूँ।' WhatsApp/SMS में Send यूज़र खुद दबाता है। ")
-         .append("समय/तारीख़ के लिए current_time बुलाओ। काम पक्का न हो तो एक छोटा सवाल पूछ लो।\n")
+         .append("आवाज़, साइलेंट/वाइब्रेट, Wi-Fi/ब्लूटूथ/ब्राइटनेस सेटिंग, रिमाइंडर, नोट कॉपी, बैटरी, UPI ऐप खोलना, नेविगेशन, सेल्फ़ी — इनके भी functions हैं। ")
+         .append("पैसे भेजने के लिए सिर्फ़ open_upi_app बुलाओ; पेमेंट, OTP या PIN कभी मत माँगो।\n")
+         .append("एक साथ कई काम कहे जाएँ ('सोनू को कॉल करो और फिर YouTube खोलो') तो functions उसी क्रम में एक-एक करके बुलाओ — हर एक का जवाब आने के बाद अगला। ")
+         .append("गणित/हिसाब (प्रतिशत, GST, EMI) खुद सही-सही हल करके बोलो।\n")
+         .append("समय/तारीख़ के लिए current_time, बैटरी के लिए battery_status बुलाओ। काम पक्का न हो तो एक छोटा सवाल पूछ लो।\n")
          .append("आज की तारीख़: ").append(LocalInfo.todayText()).append("।\n");
         String li = lang().aiInstruction();
         if (li != null && li.length() > 0) s.append(li).append("\n");
+        else s.append("भाषा पहचानो: यूज़र की आवाज़ से उसकी भाषा पहचानो (हिंदी, भोजपुरी, मैथिली, English, বাংলা, தமிழ், తెలుగు, मराठी, ગુજરાતી, ਪੰਜਾਬੀ, ಕನ್ನಡ, മലയാളം, ଓଡ଼ିଆ, اردو) ")
+                .append("और ठीक उसी भाषा में जवाब दो; यूज़र भाषा बदले तो तुम भी तुरंत बदलो। Always answer in the language the user is speaking right now.\n");
         List<String[]> h = Convo.snapshot();
         if (!h.isEmpty()) {
             s.append("पिछली बातचीत (संदर्भ के लिए):\n");
@@ -310,6 +321,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
 
     @Override public void onUserText(String text) {
         lastUser = text;
+        userSpoke = true;
         heard.setText("आप: " + text);
         choiceBox.removeAllViews();
     }
@@ -354,6 +366,10 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
                 session.sendToolResponse(id, name, new JSONObject().put("result", LocalInfo.timeReply() + " " + LocalInfo.dateReply()));
                 return;
             }
+            if ("battery_status".equals(name)) {
+                session.sendToolResponse(id, name, new JSONObject().put("result", actions.batteryText()));
+                return;
+            }
             Map<String, String> m = new HashMap<>();
             Iterator<String> it = args.keys();
             while (it.hasNext()) { String k = it.next(); m.put(k, String.valueOf(args.opt(k))); }
@@ -364,7 +380,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
             capture = c;
             choiceBox.removeAllViews();
             actions.execute(act.type, act.a, act.b);
-            pollCapture(c, act.type.contains("contact") || act.type.startsWith("call") || act.type.startsWith("sms") || act.type.startsWith("whatsapp"));
+            pollCapture(c, act.type.contains("contact") || act.type.startsWith("call") || act.type.startsWith("sms") || act.type.startsWith("whatsapp")
+                    || act.type.equals("upi") || act.type.equals("youtube"));
         } catch (Exception e) {
             try { session.sendToolResponse(id, name, new JSONObject().put("error", "काम नहीं हो पाया")); } catch (Exception ignored) { }
         }
@@ -444,6 +461,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         chip.setText(note);
         orb.setMode(OrbView.LISTEN);
         if (tts == null) initTts();
+        final boolean gem = key().length() > 10;
+        try { exec.execute(() -> AiClient.warmUp(gem)); } catch (Exception ignored) { }
         String cmd = firstCmd;
         firstCmd = null;
         if (cmd != null && cmd.trim().length() > 0) process(cmd.trim());
@@ -478,6 +497,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         String s = forSpeech(text);
         if (s.isEmpty()) return;
         if (!ttsReady || tts == null) { pendingSpeech.add(s); return; }
+        if (quiet != null && !liteListening) quiet.unmuteNow();
         try {
             int r = tts.setLanguage(Locale.forLanguageTag(Lang.ttsForText(s, lang())));
             if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) tts.setLanguage(new Locale("hi", "IN"));
@@ -504,6 +524,9 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     private void process(String text) {
         heard.setText("आप: " + text);
         choiceBox.removeAllViews();
+        userSpoke = true;
+        String learned = Lang.learn(prefs.getString("auto_sr", "hi-IN"), text);
+        if (learned != null) prefs.edit().putString("auto_sr", learned).apply();
         if (Convo.isStop(text)) { stopListening(); say("ठीक है, फिर मिलते हैं!"); main.postDelayed(this::finish, 1600); return; }
         try {
             if (actions.handlePending(text)) return;
@@ -524,7 +547,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         final SentenceBuffer buf = new SentenceBuffer();
         final boolean[] spokeAny = {false};
         exec.execute(() -> {
-            final AiClient.Result r = AiClient.askStream(snap, k, model, lang().aiInstruction(), 8, delta -> {
+            final AiClient.Result r = AiClient.askStream(snap, k, model, Lang.aiLine(lang(), text), 8, delta -> {
                 final List<String> ready = buf.push(delta);
                 final String vis = buf.visible();
                 main.post(() -> {
@@ -556,7 +579,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
                 sr.setRecognitionListener(new L());
             }
-            Intent i = SilentMic.intent(lang().sr, 1);
+            Intent i = SilentMic.intent(Lang.srLocale(lang(), prefs.getString("auto_sr", "hi-IN")), 1);
+            early.reset();
             liteListening = true;
             status.setText("सुन रहा हूँ… बोलिए");
             orb.setMode(OrbView.LISTEN);
@@ -570,6 +594,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     }
 
     private void stopListening() {
+        early.reset();
         boolean was = liteListening;
         liteListening = false;
         try { if (sr != null) sr.cancel(); } catch (Exception ignored) { }
@@ -597,7 +622,10 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         public void onEvent(int t, Bundle p) { }
         public void onPartialResults(Bundle b) {
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (r != null && !r.isEmpty() && r.get(0).length() > 0) heard.setText("आप: " + r.get(0));
+            if (r != null && !r.isEmpty() && r.get(0).length() > 0) {
+                heard.setText("आप: " + r.get(0));
+                early.onPartial(r.get(0), () -> { if (liteListening && sr != null) try { sr.stopListening(); } catch (Exception ignored) { } });
+            }
         }
         public void onError(int error) {
             boolean was = liteListening;
@@ -672,6 +700,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     @Override
     protected void onResume() {
         super.onResume();
+        actions.resumeQueue();
         if (started && !live && !liteListening && !liteBusy && tts != null && !tts.isSpeaking() && !leftForAction && !backoff.stopped()) main.postDelayed(this::listen, 500);
     }
 
@@ -686,6 +715,9 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     @Override
     protected void onDestroy() {
         destroyed = true;
+        if (fromWake) WakeGuard.GLOBAL.report(userSpoke, System.currentTimeMillis());
+        early.reset();
+        actions.dispose();
         main.removeCallbacksAndMessages(null);
         if (quiet != null) quiet.unmuteNow();
         if (session != null) { session.stop(); session = null; }

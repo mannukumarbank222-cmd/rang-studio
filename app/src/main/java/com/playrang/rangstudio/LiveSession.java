@@ -146,6 +146,7 @@ final class LiveSession {
             boolean ok = tryOnce(a, resume ? resumeHandle : null, code, reason);
             if (ok) {
                 current = a;
+                reconnects = 0; // a good connection: the next drop gets the full set of retries again
                 prefs.edit().putInt("live_attempt", LiveModels.indexOf(a)).apply();
                 final LiveModels.Attempt fa = a;
                 if (!resume) post(() -> ui.onConnected(fa.model, fa.search));
@@ -248,7 +249,8 @@ final class LiveSession {
                 .put("outputAudioTranscription", new JSONObject());
         if (!a.minimal) {
             s.put("realtimeInputConfig", new JSONObject().put("automaticActivityDetection",
-                    new JSONObject().put("prefixPaddingMs", 200).put("silenceDurationMs", 650)))
+                    new JSONObject().put("prefixPaddingMs", 160).put("silenceDurationMs", 500)
+                            .put("endOfSpeechSensitivity", "END_SENSITIVITY_HIGH")))
                     .put("sessionResumption", sr)
                     .put("contextWindowCompression", new JSONObject().put("slidingWindow", new JSONObject()));
         }

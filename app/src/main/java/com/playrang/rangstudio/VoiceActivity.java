@@ -10,7 +10,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.media.AudioManager;
-import android.media.ToneGenerator;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -58,6 +57,9 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     private final ListenBackoff backoff = new ListenBackoff();
     private SilentMic quiet;
     private long lastSilenceMs = 8000;
+    private boolean userSpoke;
+    private final SilentMic.EarlyStop early = new SilentMic.EarlyStop();
+    private String lastUserText = "";
 
     private TextView status, heard, answer, micBtn;
     private LinearLayout choiceBox;
@@ -77,6 +79,8 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         actions = new ActionHandler(this, this, exec);
         buildUi();
         initTts();
+        final boolean gem = prefs.getString("gemini_key", "").trim().length() > 10;
+        try { exec.execute(() -> AiClient.warmUp(gem)); } catch (Exception ignored) { }
         handle(getIntent());
     }
 
@@ -93,7 +97,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         backoff.reset();
         if (cmd != null && cmd.trim().length() > 0) process(cmd.trim());
         else {
-            tone();
+            // no beep (users asked for silent listening): Mitra just says "जी, बोलिए"
             status.setText("जी, बोलिए…");
             speak("जी, बोलिए", () -> listen(8000));
         }
@@ -186,14 +190,6 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         return v;
     }
 
-    private void tone() {
-        try {
-            ToneGenerator tg = new ToneGenerator(AudioManager.STREAM_MUSIC, 70);
-            tg.startTone(ToneGenerator.TONE_PROP_ACK, 180);
-            main.postDelayed(tg::release, 400);
-        } catch (Exception ignored) { }
-    }
-
     // ------------------------------------------------------------------ Host
     @Override
     public void botSay(String text) {
@@ -224,6 +220,11 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     // ------------------------------------------------------------------ processing
     private void process(String text) {
         heard.setText("“" + text + "”");
+        userSpoke = true;
+        lastUserText = text;
+        if (quiet != null) quiet.unmuteNow();
+        String learned = Lang.learn(prefs.getString("auto_sr", "hi-IN"), text);
+        if (learned != null) prefs.edit().putString("auto_sr", learned).apply();
         choiceBox.removeAllViews();
         if (Convo.isStop(text)) { speak("ठीक है।", this::finish); return; }
         try {
@@ -243,21 +244,41 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         final String key = prefs.getString("gemini_key", ""), model = prefs.getString("gemini_model", "gemini-flash-latest");
         final Runnable slow = () -> { if (busy) speak("एक पल, सोच रहा हूँ।", null); };
         main.postDelayed(slow, 6000);
-        exec.execute(() -> {
-            final AiClient.Result r = AiClient.ask(snap, key, model, lang().aiInstruction(), 25);
-            runOnUiThread(() -> {
-                main.removeCallbacks(slow);
-                busy = false;
-                if (destroyed) return;
-                String t = r.text == null ? AiClient.sorry() : r.text;
-                String shown = MainActivity.clean(actions.runTags(t));
-                if (shown.isEmpty()) shown = "ठीक है! 👍";
-                Convo.add("assistant", shown);
-                answer.setText(shown);
-                status.setText("मित्र");
-                speak(shown, this::followUp);
+        final SentenceBuffer buf = new SentenceBuffer();
+        final boolean[] spokeAny = {false};
+        final String langLine = Lang.aiLine(lang(), text);
+        try {
+            exec.execute(() -> {
+                // streamed: the first sentence is spoken while the rest is still being written
+                final AiClient.Result r = AiClient.askStream(snap, key, model, langLine, 12, delta -> {
+                    final List<String> ready = buf.push(delta);
+                    final String vis = buf.visible();
+                    main.post(() -> {
+                        if (destroyed) return;
+                        main.removeCallbacks(slow);
+                        answer.setText(MainActivity.clean(vis));
+                        for (String s1 : ready) { spokeAny[0] = true; queue(s1); }
+                    });
+                });
+                runOnUiThread(() -> {
+                    main.removeCallbacks(slow);
+                    busy = false;
+                    if (destroyed) return;
+                    String t = r.text == null || r.text.trim().isEmpty() ? (buf.text().isEmpty() ? AiClient.sorry() : buf.text()) : r.text;
+                    String shown = MainActivity.clean(actions.runTags(t));
+                    if (shown.isEmpty()) shown = "ठीक है! 👍";
+                    Convo.add("assistant", shown);
+                    answer.setText(shown);
+                    status.setText("मित्र");
+                    if (spokeAny[0]) {
+                        String rest = buf.flush();
+                        if (!rest.isEmpty()) queueThen(rest, this::followUp);
+                        else if (tts != null && tts.isSpeaking()) afterSpeak = this::followUp;
+                        else followUp();
+                    } else speak(shown, this::followUp);
+                });
             });
-        });
+        } catch (Exception e) { busy = false; }
     }
 
     private void followUp() {
@@ -293,6 +314,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
                 .replace("*", "").replace("#", "").replace("•", "").replaceAll("\\(स्रोत: [^)]*\\)", "").trim();
         if (!ttsReady || tts == null) { pendingSpeech = s; pendingAfter = after; return; }
         if (s.isEmpty()) { if (after != null) main.post(after); return; }
+        if (quiet != null && !listening) quiet.unmuteNow();
         try {
             String want = Lang.ttsForText(s, lang());
             int r = tts.setLanguage(Locale.forLanguageTag(want));
@@ -303,6 +325,26 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         Bundle p = new Bundle();
         p.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
         tts.speak(s, TextToSpeech.QUEUE_FLUSH, p, lastUtt);
+    }
+
+    /** Adds a streamed sentence to the speech queue (no callback). */
+    private void queue(String text) { queueThen(text, null); }
+
+    private void queueThen(String text, Runnable after) {
+        String s = text.replaceAll("https?://\\S+", "")
+                .replaceAll("[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{FE0F}\\x{200D}\\x{2B00}-\\x{2BFF}]", "")
+                .replace("*", "").replace("#", "").replace("•", "").trim();
+        if (s.isEmpty()) { if (after != null) main.post(after); return; }
+        if (!ttsReady || tts == null) { pendingSpeech = pendingSpeech == null ? s : pendingSpeech + " " + s; pendingAfter = after; return; }
+        try {
+            int r = tts.setLanguage(Locale.forLanguageTag(Lang.ttsForText(s, lang())));
+            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) tts.setLanguage(new Locale("hi", "IN"));
+        } catch (Exception ignored) { }
+        afterSpeak = after;
+        lastUtt = "v" + (utter++);
+        Bundle p = new Bundle();
+        p.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC);
+        tts.speak(s, TextToSpeech.QUEUE_ADD, p, lastUtt);
     }
 
     // ------------------------------------------------------------------ listening
@@ -328,7 +370,8 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
                 sr.setRecognitionListener(new L());
             }
-            Intent i = SilentMic.intent(lang().sr, 1);
+            Intent i = SilentMic.intent(Lang.srLocale(lang(), prefs.getString("auto_sr", "hi-IN")), 1);
+            early.reset();
             listening = true;
             lastSilenceMs = silenceMs;
             status.setText("🎙️ सुन रहा हूँ…");
@@ -346,6 +389,7 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     }
 
     private void stopListening() {
+        early.reset();
         main.removeCallbacks(silenceTimeout);
         boolean was = listening;
         listening = false;
@@ -372,7 +416,10 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         public void onEvent(int t, Bundle p) { }
         public void onPartialResults(Bundle b) {
             ArrayList<String> r = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (r != null && !r.isEmpty()) heard.setText("“" + r.get(0) + "”");
+            if (r != null && !r.isEmpty()) {
+                heard.setText("“" + r.get(0) + "”");
+                early.onPartial(r.get(0), () -> { if (listening && sr != null) try { sr.stopListening(); } catch (Exception ignored) { } });
+            }
         }
         public void onError(int error) {
             boolean wasListening = listening;
@@ -426,6 +473,12 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        actions.resumeQueue();
+    }
+
+    @Override
     protected void onStop() {
         super.onStop();
         if (leftForAction && !isChangingConfigurations()) finish();
@@ -434,6 +487,9 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     @Override
     protected void onDestroy() {
         destroyed = true;
+        WakeGuard.GLOBAL.report(userSpoke, System.currentTimeMillis()); // false-trigger learning for the wake word
+        early.reset();
+        actions.dispose();
         main.removeCallbacksAndMessages(null);
         if (quiet != null) quiet.unmuteNow();
         if (sr != null) { try { sr.destroy(); } catch (Exception ignored) { } sr = null; }

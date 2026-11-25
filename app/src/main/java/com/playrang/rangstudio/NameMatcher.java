@@ -61,7 +61,7 @@ final class NameMatcher {
         List<String> out = new ArrayList<>();
         out.add(q);
         String d = toDevanagari(q).trim();
-        String[] suf = {"ला", "ना", "ले", "कडे", "के", "क", "ने", "नूं", "नू", "कु", "ku", "la", "nu"};
+        String[] suf = {"क्कु", "उक्कु", "ला", "ना", "ले", "कडे", "के", "क", "ने", "नूं", "नू", "कु", "कि", "गे", "ku", "la", "nu"};
         for (String x : suf) {
             if (d.endsWith(x) && d.length() > x.length() + 1) { out.add(d.substring(0, d.length() - x.length())); break; }
         }

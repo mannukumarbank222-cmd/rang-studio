@@ -45,10 +45,22 @@ final class AiClient {
             + "[[ACTION:maps|जगह]] — नक्शे पर जगह/रास्ता\n"
             + "[[ACTION:camera]] — कैमरा\n"
             + "[[ACTION:share|टेक्स्ट]] — टेक्स्ट शेयर करना\n"
+            + "[[ACTION:volume|up]] / [[ACTION:volume|down]] / [[ACTION:volume|mute]] / [[ACTION:volume|max]] — फ़ोन की आवाज़\n"
+            + "[[ACTION:ringer|silent]] / [[ACTION:ringer|vibrate]] / [[ACTION:ringer|normal]] — फ़ोन साइलेंट/वाइब्रेट\n"
+            + "[[ACTION:settings|wifi]] (या bluetooth, display, location, airplane, data, hotspot, battery, sound, apps) — फ़ोन की वह सेटिंग खोलना\n"
+            + "[[ACTION:reminder|किस बात का रिमाइंडर|कब, जैसे कल सुबह 9 बजे]] — कैलेंडर में रिमाइंडर\n"
+            + "[[ACTION:copy|टेक्स्ट]] — कोई बात नोट करके क्लिपबोर्ड पर कॉपी करना\n"
+            + "[[ACTION:battery]] — बैटरी कितनी है\n"
+            + "[[ACTION:upi]] — UPI ऐप (PhonePe/GPay/Paytm) खोलना; पेमेंट यूज़र खुद करता है\n"
+            + "[[ACTION:navigate|जगह]] — उस जगह तक रास्ता (नेविगेशन) शुरू करना\n"
+            + "[[ACTION:camera|front]] — सेल्फ़ी कैमरा\n"
+            + "एक से ज़्यादा काम कहे जाएँ ('X को कॉल करो और फिर YouTube खोलो') तो उसी क्रम में कई टैग लगाओ (ज़्यादा से ज़्यादा 5)।\n"
+            + "हिसाब/गणित के सवाल (जैसे 15% GST, EMI, जोड़-घटाना) खुद सही-सही हल करके जवाब बताओ।\n"
             + "ज़रूरी नियम: फ़ोन के कॉन्टैक्ट्स ऐप खुद ढूँढ लेता है, इसलिए कभी मत कहो कि 'मुझे नंबर नहीं पता', 'मैं कॉल ऐप नहीं जानता' या 'मैं कॉल नहीं कर सकता'। "
             + "किसी को कॉल/मैसेज करने को कहा जाए तो हमेशा नाम के साथ call_contact / whatsapp_contact / sms_contact टैग लगाओ "
             + "(नाम यूज़र के ही शब्दों में, 'को/ko/ਨੂੰ/ને/ला/কে' जैसे शब्द हटाकर)। "
             + "टैग सिर्फ़ तब लगाओ जब यूज़र सच में कोई काम कराना चाहे; आम सवालों के लिए टैग मत लगाओ। टैग का फ़ॉर्मैट बिल्कुल ऊपर जैसा रखो। "
+            + "पैसे भेजने/पेमेंट के लिए सिर्फ़ upi ऐप खोलो — खुद कभी पेमेंट, OTP या PIN मत माँगो। "
             + "तुम दूसरे ऐप्स के अंदर बटन नहीं दबा सकते — WhatsApp/SMS में Send यूज़र खुद दबाता है।\n"
             + "हर सवाल का जवाब देना ज़रूरी है: इतिहास, विज्ञान, भूगोल, खेल, फ़िल्में, धर्म, गणित, देश-दुनिया — किसी भी आम सवाल से कभी मना मत करो, "
             + "'मुझे नहीं पता' कहकर मत छोड़ो; पक्का न पता हो तो अपना सबसे अच्छा अंदाज़ा साफ़ बताओ। जवाब बोलकर सुनाने लायक छोटे रखो। "
@@ -69,7 +81,7 @@ final class AiClient {
     }
 
     static Result ask(List<String[]> history, String geminiKey, String geminiModel, String langLine) {
-        return ask(history, geminiKey, geminiModel, langLine, 50);
+        return ask(history, geminiKey, geminiModel, langLine, 20);
     }
 
     /** Last time a request went to the free Pollinations endpoint (it allows ~1 reply / 45 s per IP). */
@@ -84,29 +96,49 @@ final class AiClient {
      * @param maxWaitSec how long we may wait for the free AI's rate limit before using the fallbacks' answer
      */
     static Result ask(List<String[]> history, String geminiKey, String geminiModel, String langLine, int maxWaitSec) {
-        sys = system(langLine);
+        final String sy = system(langLine);
         String q = lastUser(history);
         if (geminiKey != null && geminiKey.trim().length() > 10) {
-            Result r = gemini(history, geminiKey.trim(), geminiModel);
+            Result r = gemini(history, geminiKey.trim(), geminiModel, sy);
             if (ok(r)) { r.source = "gemini"; return r; }
         }
+        // Free engines race: Pollinations and LLM7 start together and the first good answer wins (was one after another).
         int polliWait = 0;
         long since = System.currentTimeMillis() - lastPolli;
-        if (since >= POLLI_GAP_MS) {
-            lastPolli = System.currentTimeMillis();
-            Result r = pollinations(history);
-            if (ok(r)) { r.source = "pollinations"; return r; }
-            if (r.waitSeconds > 0) polliWait = r.waitSeconds;
-            else {
-                Result g = pollinationsGet(history);
-                if (ok(g)) { g.source = "pollinations-get"; return g; }
-            }
-        } else {
-            polliWait = (int) Math.ceil((POLLI_GAP_MS - since) / 1000.0);
+        boolean polliOk = since >= POLLI_GAP_MS;
+        if (!polliOk) polliWait = (int) Math.ceil((POLLI_GAP_MS - since) / 1000.0);
+        else lastPolli = System.currentTimeMillis();
+        final java.util.concurrent.LinkedBlockingQueue<Result> done = new java.util.concurrent.LinkedBlockingQueue<>();
+        int racers = 0;
+        if (polliOk) {
+            racers++;
+            Thread t = new Thread(() -> {
+                Result r = pollinations(history, sy);
+                if (ok(r)) r.source = "pollinations";
+                else if (r.waitSeconds <= 0) { Result g = pollinationsGet(history, sy); if (ok(g)) { g.source = "pollinations-get"; r = g; } }
+                done.offer(r);
+            }, "mitra-ai-polli");
+            t.setDaemon(true);
+            t.start();
         }
-        Result l = llm7(history, "gpt-oss:20b");
-        if (!ok(l) && l.error != null && l.error.startsWith("model")) l = llm7(history, "mistral-Nemo-Instruct-2407");
-        if (ok(l)) { l.source = "llm7"; return l; }
+        racers++;
+        Thread t2 = new Thread(() -> {
+            Result l = llm7(history, "gpt-oss:20b", sy);
+            if (!ok(l) && l.error != null && l.error.startsWith("model")) l = llm7(history, "mistral-Nemo-Instruct-2407", sy);
+            if (ok(l)) l.source = "llm7";
+            done.offer(l);
+        }, "mitra-ai-llm7");
+        t2.setDaemon(true);
+        t2.start();
+        long deadline = System.currentTimeMillis() + 17000;
+        for (int got = 0; got < racers; got++) {
+            Result r;
+            try { r = done.poll(Math.max(1, deadline - System.currentTimeMillis()), java.util.concurrent.TimeUnit.MILLISECONDS); }
+            catch (InterruptedException e) { return text(sorry(), "none"); }
+            if (r == null) break;
+            if (ok(r)) return r;
+            if (r.waitSeconds > 0) polliWait = r.waitSeconds;
+        }
 
         String know = null;
         try { know = Knowledge.answer(q); } catch (Throwable ignored) { }
@@ -115,9 +147,9 @@ final class AiClient {
         if (polliWait > 0 && polliWait <= maxWaitSec) {
             try { Thread.sleep(polliWait * 1000L); } catch (InterruptedException e) { return text(sorry(), "none"); }
             lastPolli = System.currentTimeMillis();
-            Result r = pollinations(history);
+            Result r = pollinations(history, sy);
             if (ok(r)) { r.source = "pollinations"; return r; }
-            Result g = pollinationsGet(history);
+            Result g = pollinationsGet(history, sy);
             if (ok(g)) { g.source = "pollinations-get"; return g; }
         }
         if (know != null) return text(know, "wikipedia");
@@ -140,7 +172,7 @@ final class AiClient {
     }
 
     /** Pollinations "classic" GET endpoint with a short system prompt and the last few turns in the URL. */
-    static Result pollinationsGet(List<String[]> history) {
+    static Result pollinationsGet(List<String[]> history, String sy) {
         Result res = new Result();
         try {
             StringBuilder p = new StringBuilder();
@@ -154,10 +186,11 @@ final class AiClient {
                 p.append(c).append("\n");
             }
             String shortSys = "You are Mitra (मित्र), a friendly Indian voice assistant by PlayRang Technologies. Always answer the question; "
-                    + "never refuse ordinary questions. Reply in the same language and script as the user, in 1-3 short spoken-friendly sentences, no markdown.";
+                    + "never refuse ordinary questions. Reply in the same language and script as the user, in 1-3 short spoken-friendly sentences, no markdown."
+                    + langHint(sy);
             String url = "https://text.pollinations.ai/" + URLEncoder.encode(p.toString(), "UTF-8").replace("+", "%20")
                     + "?model=openai&private=true&system=" + URLEncoder.encode(shortSys, "UTF-8").replace("+", "%20");
-            String[] out = request("GET", url, null, 8000, 20000);
+            String[] out = request("GET", url, null, 5000, 14000);
             int code = Integer.parseInt(out[0]);
             String t = out[1] == null ? "" : out[1].trim();
             String low = t.toLowerCase();
@@ -171,14 +204,14 @@ final class AiClient {
     }
 
     /** LLM7 (OpenAI-compatible, key-free with a per-IP free allowance). */
-    static Result llm7(List<String[]> history, String model) {
+    static Result llm7(List<String[]> history, String model, String sys) {
         Result res = new Result();
         try {
             JSONArray msgs = new JSONArray();
             msgs.put(new JSONObject().put("role", "system").put("content", sys));
             for (String[] m : history) msgs.put(new JSONObject().put("role", m[0]).put("content", m[1]));
             JSONObject body = new JSONObject().put("model", model).put("messages", msgs);
-            String[] out = request("POST", "https://api.llm7.io/v1/chat/completions", body.toString(), 8000, 20000);
+            String[] out = request("POST", "https://api.llm7.io/v1/chat/completions", body.toString(), 5000, 15000);
             int code = Integer.parseInt(out[0]);
             String t = out[1] == null ? "" : out[1].trim();
             if (code == 400 && t.contains("unavailable")) { res.error = "model"; return res; }
@@ -192,19 +225,27 @@ final class AiClient {
         return res;
     }
 
-    private static volatile String sys = SYSTEM_PROMPT;
+    /** The "Reply ONLY in …" sentence of the language line, for the short GET prompt. */
+    private static String langHint(String sy) {
+        if (sy == null) return "";
+        int i = sy.indexOf("Reply ONLY in ");
+        if (i < 0) i = sy.indexOf("Always reply in ");
+        if (i < 0) return "";
+        int e = sy.indexOf('.', i);
+        return " " + sy.substring(i, e < 0 ? sy.length() : e + 1);
+    }
 
     private static final Pattern RETRY = Pattern.compile("(?i)retry after\\s*(\\d+)\\s*s");
     private static final Pattern ANY_SECONDS = Pattern.compile("(\\d+)\\s*(?:s\\b|sec|second)");
 
-    static Result pollinations(List<String[]> history) {
+    static Result pollinations(List<String[]> history, String sys) {
         Result res = new Result();
         try {
             JSONArray msgs = new JSONArray();
             msgs.put(new JSONObject().put("role", "system").put("content", sys));
             for (String[] m : history) msgs.put(new JSONObject().put("role", m[0]).put("content", m[1]));
             JSONObject body = new JSONObject().put("model", "openai").put("messages", msgs).put("private", true);
-            String[] out = request("POST", "https://text.pollinations.ai/openai", body.toString(), 8000, 22000);
+            String[] out = request("POST", "https://text.pollinations.ai/openai", body.toString(), 5000, 15000);
             int code = Integer.parseInt(out[0]);
             String txt = out[1];
             if (txt == null) txt = "";
@@ -252,7 +293,7 @@ final class AiClient {
 
     private static int clampWait(int s) { return Math.max(3, Math.min(90, s + 1)); }
 
-    static Result gemini(List<String[]> history, String key, String model) {
+    static Result gemini(List<String[]> history, String key, String model, String sys) {
         Result res = new Result();
         if (model == null || model.trim().isEmpty()) model = "gemini-flash-latest";
         try {
@@ -269,7 +310,7 @@ final class AiClient {
                     + URLEncoder.encode(model.trim(), "UTF-8") + ":generateContent?key=" + URLEncoder.encode(key, "UTF-8"),
                     body.toString());
             int code = Integer.parseInt(out[0]);
-            if (code == 404 && !"gemini-2.5-flash".equals(model.trim())) return gemini(history, key, "gemini-2.5-flash");
+            if (code == 404 && !"gemini-2.5-flash".equals(model.trim())) return gemini(history, key, "gemini-2.5-flash", sys);
             if (code == 429) { res.waitSeconds = parseWait(out[1] == null ? "" : out[1]); if (res.waitSeconds > 60) res.waitSeconds = 30; return res; }
             if (code < 200 || code >= 300) {
                 res.error = (code == 400 || code == 403) ? "Gemini API key सही नहीं लग रही — सेटिंग्स में जाँचिए।"
@@ -303,13 +344,13 @@ final class AiClient {
      */
     static Result askStream(List<String[]> history, String geminiKey, String geminiModel, String langLine, int maxWaitSec, Sink sink) {
         if (geminiKey != null && geminiKey.trim().length() > 10) {
-            sys = system(langLine);
+            final String sys = system(langLine);
             final boolean[] any = {false};
-            Result r = geminiStream(history, geminiKey.trim(), geminiModel, d -> { any[0] = true; sink.onText(d); });
+            Result r = geminiStream(history, geminiKey.trim(), geminiModel, sys, d -> { any[0] = true; sink.onText(d); });
             if (ok(r) || any[0]) { r.source = "gemini-stream"; if (r.text == null) r.text = ""; r.error = null; return r; }
-            if (r.waitSeconds > 0 && r.waitSeconds <= Math.min(maxWaitSec, 20)) {
+            if (r.waitSeconds > 0 && r.waitSeconds <= Math.min(maxWaitSec, 8)) {
                 try { Thread.sleep(r.waitSeconds * 1000L); } catch (InterruptedException e) { return text(sorry(), "none"); }
-                r = geminiStream(history, geminiKey.trim(), geminiModel, d -> { any[0] = true; sink.onText(d); });
+                r = geminiStream(history, geminiKey.trim(), geminiModel, sys, d -> { any[0] = true; sink.onText(d); });
                 if (ok(r) || any[0]) { r.source = "gemini-stream"; if (r.text == null) r.text = ""; r.error = null; return r; }
             }
             return ask(history, null, null, langLine, maxWaitSec); // free chain, no second Gemini try
@@ -317,7 +358,7 @@ final class AiClient {
         return ask(history, null, null, langLine, maxWaitSec);
     }
 
-    static Result geminiStream(List<String[]> history, String key, String model, Sink sink) {
+    static Result geminiStream(List<String[]> history, String key, String model, String sys, Sink sink) {
         Result res = new Result();
         if (model == null || model.trim().isEmpty()) model = "gemini-flash-latest";
         HttpURLConnection c = null;
@@ -332,12 +373,12 @@ final class AiClient {
             c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/" + URLEncoder.encode(model.trim(), "UTF-8")
                     + ":streamGenerateContent?alt=sse&key=" + URLEncoder.encode(key, "UTF-8")).openConnection();
             c.setRequestMethod("POST");
-            c.setConnectTimeout(8000);
-            c.setReadTimeout(20000);
+            c.setConnectTimeout(5000);
+            c.setReadTimeout(15000);
             c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             c.setRequestProperty("Accept", "text/event-stream");
-            c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
+            c.setRequestProperty("User-Agent", "Mitra-Android/4.0");
             OutputStream os = c.getOutputStream();
             os.write(body.toString().getBytes("UTF-8"));
             os.close();
@@ -348,9 +389,9 @@ final class AiClient {
                 if (code == 400 && !noThinkingCfg && eb.toLowerCase(java.util.Locale.ROOT).contains("think")) {
                     noThinkingCfg = true;
                     c.disconnect();
-                    return geminiStream(history, key, model, sink);
+                    return geminiStream(history, key, model, sys, sink);
                 }
-                if (code == 404 && !"gemini-flash-latest".equals(model.trim())) { c.disconnect(); return geminiStream(history, key, "gemini-flash-latest", sink); }
+                if (code == 404 && !"gemini-flash-latest".equals(model.trim())) { c.disconnect(); return geminiStream(history, key, "gemini-flash-latest", sys, sink); }
                 if (code == 429) { res.waitSeconds = parseWait(eb); if (res.waitSeconds > 60) res.waitSeconds = 30; return res; }
                 res.error = (code == 400 || code == 403) ? "Gemini API key सही नहीं लग रही — सेटिंग्स में जाँचिए।" : "Gemini से जवाब नहीं मिला (कोड " + code + ")।";
                 return res;
@@ -378,7 +419,8 @@ final class AiClient {
                     if (delta.length() > 0) { all.append(delta); sink.onText(delta.toString()); }
                 } catch (Exception ignored) { }
             }
-            br.close();
+            br.close(); // fully read + closed: the connection goes back to the keep-alive pool
+            c = null;
             if (all.toString().trim().isEmpty()) res.error = "Gemini से खाली जवाब आया।";
             else res.text = all.toString().trim();
         } catch (Exception e) {
@@ -395,7 +437,7 @@ final class AiClient {
         c.setRequestMethod(method);
         c.setConnectTimeout(connectMs);
         c.setReadTimeout(readMs);
-        c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
+        c.setRequestProperty("User-Agent", "Mitra-Android/4.0");
         c.setRequestProperty("Accept", "application/json, text/plain, */*");
         if (json != null) {
             c.setDoOutput(true);
@@ -407,43 +449,105 @@ final class AiClient {
         try {
             int code = c.getResponseCode();
             InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
-            String body = is == null ? "" : readAll(is);
+            String body = is == null ? "" : readAll(is); // read fully + close = connection reused (keep-alive)
             return new String[]{String.valueOf(code), body};
-        } finally {
+        } catch (Exception e) {
             c.disconnect();
+            throw e;
         }
     }
 
     static String[] post(String url, String json) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod("POST");
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(25000);
+        c.setConnectTimeout(5000);
+        c.setReadTimeout(15000);
         c.setDoOutput(true);
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         c.setRequestProperty("Accept", "application/json");
-        c.setRequestProperty("User-Agent", "Mitra-Android/3.0");
+        c.setRequestProperty("User-Agent", "Mitra-Android/4.0");
         OutputStream os = c.getOutputStream();
         os.write(json.getBytes("UTF-8"));
         os.close();
         int code = c.getResponseCode();
         InputStream is = code >= 400 ? c.getErrorStream() : c.getInputStream();
         String body = is == null ? "" : readAll(is);
-        c.disconnect();
         return new String[]{String.valueOf(code), body};
     }
 
     static String get(String url) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(20000);
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(10000);
         c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
         c.setRequestProperty("Accept-Language", "hi-IN,hi;q=0.9,en;q=0.8");
         c.setRequestProperty("Cookie", "CONSENT=YES+1; SOCS=CAI");
         InputStream is = c.getResponseCode() >= 400 ? c.getErrorStream() : c.getInputStream();
-        String body = is == null ? "" : readAll(is);
-        c.disconnect();
-        return body;
+        return is == null ? "" : readAll(is);
+    }
+
+    /**
+     * Streams a page and stops at the first regex match (e.g. the first YouTube video id), so we do not wait for a
+     * 1 MB page. @return the group, or null.
+     */
+    static String firstMatch(String url, Pattern p, int group, int maxBytes, int timeoutMs) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(timeoutMs);
+            c.setReadTimeout(timeoutMs);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+            c.setRequestProperty("Accept-Language", "hi-IN,hi;q=0.9,en;q=0.8");
+            c.setRequestProperty("Cookie", "CONSENT=YES+1; SOCS=CAI");
+            if (c.getResponseCode() >= 400) return null;
+            InputStream is = c.getInputStream();
+            byte[] buf = new byte[16384];
+            StringBuilder sb = new StringBuilder();
+            int n, total = 0, scanned = 0;
+            while ((n = is.read(buf)) > 0 && total < maxBytes) {
+                total += n;
+                sb.append(new String(buf, 0, n, "ISO-8859-1")); // ids are ASCII; byte-for-char keeps offsets simple
+                Matcher m = p.matcher(sb);
+                if (m.find(Math.max(0, scanned - 200))) return m.group(group);
+                scanned = sb.length();
+                if (sb.length() > 400000) { sb.delete(0, sb.length() - 2000); scanned = 0; }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Exception ignored) { }
+        }
+    }
+
+    private static volatile long warmedAt;
+
+    /**
+     * Opens TLS connections to the AI hosts ahead of the first question (DNS + TLS handshake ≈ 0.3-1 s on mobile data);
+     * the pooled keep-alive connection is then reused by the real request. Call off the main thread.
+     */
+    static void warmUp(boolean gemini) {
+        if (System.currentTimeMillis() - warmedAt < 120000) return;
+        warmedAt = System.currentTimeMillis();
+        String[] hosts = gemini ? new String[]{"https://generativelanguage.googleapis.com/"}
+                : new String[]{"https://text.pollinations.ai/", "https://api.llm7.io/"};
+        for (String h : hosts) {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(h).openConnection();
+                c.setRequestMethod("HEAD");
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                c.setRequestProperty("User-Agent", "Mitra-Android/4.0");
+                c.getResponseCode();
+                InputStream is = c.getResponseCode() >= 400 ? c.getErrorStream() : c.getInputStream();
+                if (is != null) readAll(is);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    static {
+        System.setProperty("http.keepAlive", "true");
+        System.setProperty("http.maxConnections", "6");
     }
 
     static String readAll(InputStream is) throws Exception {

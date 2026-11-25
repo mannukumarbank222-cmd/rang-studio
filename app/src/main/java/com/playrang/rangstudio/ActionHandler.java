@@ -3,6 +3,12 @@ package com.playrang.rangstudio;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.IntentFilter;
+import android.media.AudioManager;
+import android.os.BatteryManager;
+import android.provider.CalendarContract;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -28,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -56,6 +63,22 @@ final class ActionHandler {
         this.host = host;
         this.exec = exec;
         this.prefs = act.getSharedPreferences("mitra", Context.MODE_PRIVATE);
+        final Context app = act.getApplicationContext();
+        bg(() -> launcherApps(app)); // warm the app list so "X खोलो" is instant
+    }
+
+    /** Runs work off the main thread; silently ignored once the screen is closing. */
+    private boolean bg(Runnable r) {
+        try { exec.execute(r); return true; } catch (RejectedExecutionException e) { return false; }
+    }
+
+    private boolean disposed;
+
+    /** Called from the host's onDestroy: stops delayed work; queued steps stay for the next Mitra screen. */
+    void dispose() {
+        disposed = true;
+        main.removeCallbacksAndMessages(null);
+        permYes = null; permNo = null;
     }
 
     // ---------------------------------------------------------------- small conversation memory (this session only)
@@ -83,11 +106,110 @@ final class ActionHandler {
     // ---------------------------------------------------------------- entry points
     /** @return true when the command was understood and handled on the device */
     boolean tryLocal(String raw) {
-        CommandParser.Cmd c = CommandParser.parse(raw);
-        if (c == null) return false;
-        execute(c.type, c.a, c.b);
+        List<CommandParser.Cmd> cs = CommandParser.parseAll(raw);
+        if (cs.isEmpty()) return false;
+        if (cs.size() == 1) { CommandParser.Cmd c = cs.get(0); execute(c.type, c.a, c.b); return true; }
+        runSteps(cs);
         return true;
     }
+
+    // ---------------------------------------------------------------- multi-step ("X ko call karo aur phir YouTube kholo")
+    private static final List<CommandParser.Cmd> QUEUE = new ArrayList<>();
+    private static long queueAt;
+    private static boolean afterCall;
+    private boolean searching, launching;
+    private long stepStarted;
+
+    static boolean hasQueue() { synchronized (QUEUE) { return !QUEUE.isEmpty() && System.currentTimeMillis() - queueAt < 15 * 60000L; } }
+
+    void runSteps(List<CommandParser.Cmd> cs) {
+        synchronized (QUEUE) { QUEUE.clear(); QUEUE.addAll(cs); queueAt = System.currentTimeMillis(); afterCall = false; }
+        boolean callFirst = false;
+        for (int i = 0; i < cs.size() - 1; i++) if (isCall(cs.get(i).type)) callFirst = true;
+        host.botSay("ठीक है, " + cs.size() + " काम एक-एक करके करता हूँ।" + (callFirst ? " कॉल के बाद मित्र पर लौटते ही बाकी काम कर दूँगा।" : ""));
+        main.postDelayed(nextRun, 350);
+    }
+
+    /** The user is being asked something (a contact choice, a permission, a name): the queue waits for it. */
+    private boolean waitingForUser() {
+        return options != null || awaitName != null || permYes != null || permNo != null || searching || launching;
+    }
+
+    private static boolean isCall(String type) { return type.startsWith("call") || type.equals("dial") || type.equals("phone"); }
+
+    private static boolean leavesApp(String type) {
+        switch (type) {
+            case "calc": case "time": case "date": case "battery": case "torch": case "flashlight": case "volume": case "ringer":
+            case "copy": case "ask_name": case "contact_number": return false;
+            default: return true;
+        }
+    }
+
+    private void nextStep() {
+        if (disposed) return;
+        CommandParser.Cmd c;
+        synchronized (QUEUE) {
+            if (QUEUE.isEmpty()) return;
+            if (System.currentTimeMillis() - queueAt > 15 * 60000L) { QUEUE.clear(); return; }
+            c = QUEUE.remove(0);
+            queueAt = System.currentTimeMillis();
+        }
+        stepStarted = System.currentTimeMillis();
+        lastLaunch = "";
+        execute(c.type, c.a, c.b);
+        final boolean call = isCall(c.type) || c.type.startsWith("whatsapp_call");
+        final boolean leaves = leavesApp(c.type);
+        main.postDelayed(() -> afterStep(call, leaves), 400);
+    }
+
+    private void afterStep(boolean call, boolean leaves) {
+        if (disposed || !hasQueue()) return;
+        if (waitingForUser()) {
+            if (System.currentTimeMillis() - stepStarted < 120000) { main.postDelayed(() -> afterStep(call, leaves), 400); return; }
+            synchronized (QUEUE) { QUEUE.clear(); }
+            return;
+        }
+        if (call && isCall(lastLaunch)) {
+            // after a call: continue when the user comes back to Mitra (or the call ends while Mitra may open screens)
+            synchronized (QUEUE) { afterCall = true; }
+            main.postDelayed(this::pollCallEnd, 3000);
+            return;
+        }
+        main.postDelayed(nextRun, leaves ? 2200 : 600);
+    }
+
+    private void pollCallEnd() {
+        if (disposed || !hasQueue()) return;
+        synchronized (QUEUE) { if (!afterCall) return; }
+        AudioManager am = (AudioManager) act.getSystemService(Context.AUDIO_SERVICE);
+        int mode = am == null ? AudioManager.MODE_NORMAL : am.getMode();
+        boolean inCall = mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION || mode == AudioManager.MODE_RINGTONE;
+        boolean canDraw = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(act);
+        if (!inCall && canDraw && System.currentTimeMillis() - stepStarted > 6000) { synchronized (QUEUE) { afterCall = false; } nextStep(); return; }
+        main.postDelayed(this::pollCallEnd, 1500);
+    }
+
+    /** Host onResume: continue steps that waited for a call (or for the user to come back). */
+    void resumeQueue() {
+        if (disposed || !hasQueue()) return;
+        boolean wasCall;
+        synchronized (QUEUE) {
+            wasCall = afterCall;
+            // a leftover list from a closed screen is only continued soon after; a call may take longer
+            if (!wasCall && System.currentTimeMillis() - queueAt > 3 * 60000L) { QUEUE.clear(); return; }
+            afterCall = false;
+        }
+        if (waitingForUser()) return;
+        if (wasCall || System.currentTimeMillis() - stepStarted > 2500) {
+            main.removeCallbacks(nextRun);
+            main.postDelayed(nextRun, 700);
+        }
+    }
+
+    static void clearQueue() { synchronized (QUEUE) { QUEUE.clear(); afterCall = false; } }
+
+    private String lastLaunch = "";
+    private final Runnable nextRun = this::nextStep;
 
     private static final String[] YES = {"हाँ", "हां", "हा", "haan", "han", "ha", "haa", "yes", "ok", "okay", "ओके", "जी", "ji", "ji haan",
             "जी हाँ", "हाँ जी", "kholo", "खोलो", "theek hai", "ठीक है", "sahi", "सही", "करो", "karo", "lagao", "लगाओ", "बिल्कुल", "bilkul"};
@@ -98,6 +220,7 @@ final class ActionHandler {
             List<Option> ops = options;
             if (CommandParser.isCancel(raw) && CommandParser.ordinal(raw) < 0) {
                 options = null;
+                clearQueue();
                 host.botSay("ठीक है, रहने देते हैं।");
                 return true;
             }
@@ -158,30 +281,35 @@ final class ActionHandler {
     private static final Pattern TAG = Pattern.compile("\\[\\[\\s*ACTION\\s*:\\s*([a-zA-Z_]+)\\s*(?:\\|([^\\]|]*))?(?:\\|([^\\]]*))?\\]\\]");
     private static final Pattern JSON_ACT = Pattern.compile("\\{[^{}]*\"action\"\\s*:\\s*\"[a-zA-Z_]+\"[^{}]*\\}");
 
-    /** Executes the first action tag (if any) and returns the text with all tags removed. */
+    /** Executes the action tags (several run one after another) and returns the text with all tags removed. */
     String runTags(String aiText) {
         Matcher m = TAG.matcher(aiText);
-        String type = null, a = "", b = "";
-        if (m.find()) {
-            type = m.group(1).toLowerCase(Locale.ROOT);
-            a = m.group(2) == null ? "" : m.group(2).trim();
-            b = m.group(3) == null ? "" : m.group(3).trim();
-        } else {
+        final List<CommandParser.Cmd> cmds = new ArrayList<>();
+        while (m.find() && cmds.size() < 5) {
+            String type = m.group(1).toLowerCase(Locale.ROOT);
+            String a = m.group(2) == null ? "" : m.group(2).trim();
+            String b = m.group(3) == null ? "" : m.group(3).trim();
+            cmds.add(new CommandParser.Cmd(type, a, b));
+        }
+        if (cmds.isEmpty()) {
             Matcher j = JSON_ACT.matcher(aiText);
             if (j.find()) {
                 try {
                     JSONObject o = new JSONObject(j.group());
-                    type = o.optString("action", "").toLowerCase(Locale.ROOT);
-                    a = first(o, "name", "query", "q", "url", "number", "place", "time", "value", "app", "state", "seconds", "text");
-                    b = o.has("name") || o.has("number") ? o.optString("text", o.optString("message", "")) : o.optString("message", "");
+                    String type = o.optString("action", "").toLowerCase(Locale.ROOT);
+                    String a = first(o, "name", "query", "q", "url", "number", "place", "time", "value", "app", "state", "seconds", "text");
+                    String b = o.has("name") || o.has("number") ? o.optString("text", o.optString("message", "")) : o.optString("message", "");
                     if (a.equals(b)) b = "";
-                } catch (Exception ignored) { type = null; }
+                    if (!type.isEmpty()) cmds.add(new CommandParser.Cmd(type, a, b));
+                } catch (Exception ignored) { }
                 aiText = aiText.replace(j.group(), "");
             }
         }
-        if (type != null && !type.isEmpty()) {
-            final String ft = type, fa = a, fb = b;
-            main.postDelayed(() -> execute(ft, fa, fb), 600);
+        if (cmds.size() == 1) {
+            final CommandParser.Cmd c = cmds.get(0);
+            main.postDelayed(() -> { if (!disposed) execute(c.type, c.a, c.b); }, 300);
+        } else if (cmds.size() > 1) {
+            main.postDelayed(() -> { if (!disposed) runSteps(cmds); }, 300);
         }
         return aiText.replaceAll("\\[\\[[^\\]]*\\]\\]", "").replaceAll("(?s)```(json)?\\s*```", "").trim();
     }
@@ -242,7 +370,7 @@ final class ActionHandler {
                     if (waInstalled()) whatsappNumber(a, b, null); else smsNumber(a, b, null);
                     break;
                 case "contact_number": contactAction("number", a, ""); break;
-                case "alarm": setAlarmFromText(norm(a.replaceAll("(\\d)\\s*:\\s*(\\d)", "$1.$2"))); break; // "06:30" keeps its minutes
+                case "alarm": setAlarmFromText(a); break;
                 case "timer": {
                     String d = CommandParser.digits(a);
                     int secs = Integer.parseInt(d.isEmpty() ? "60" : d);
@@ -257,7 +385,7 @@ final class ActionHandler {
                     start(i, "टाइमर वाला ऐप नहीं मिला।");
                     break;
                 }
-                case "maps": case "map": case "navigate":
+                case "maps": case "map":
                     if (a.isEmpty()) {
                         host.botSay("नक्शा खोल रहा हूँ।");
                         if (!start(new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=")), null)) view("https://maps.google.com");
@@ -268,12 +396,27 @@ final class ActionHandler {
                     }
                     break;
                 case "camera": {
-                    host.botSay("कैमरा खोल रहा हूँ 📷");
+                    boolean front = has(norm(a), "front", "selfie", "सेल्फी", "true", "1");
+                    host.botSay(front ? "सेल्फ़ी कैमरा खोल रहा हूँ 🤳" : "कैमरा खोल रहा हूँ 📷");
                     Intent i = new Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA);
+                    if (front) {
+                        i.putExtra("android.intent.extras.CAMERA_FACING", 1).putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
+                                .putExtra("android.intent.extra.USE_FRONT_CAMERA", true);
+                    }
                     if (!start(i, null)) start(new Intent(MediaStore.ACTION_IMAGE_CAPTURE), "कैमरा ऐप नहीं मिला।");
                     break;
                 }
                 case "torch": case "flashlight": torch(!has(norm(a), "off", "band", "बंद", "ऑफ", "false", "0")); break;
+                case "calc": host.botSay(a.isEmpty() ? "हिसाब समझ नहीं आया, फिर से बोलिए।" : a); break;
+                case "battery": host.botSay(batteryText()); break;
+                case "volume": volume(a); break;
+                case "ringer": ringer(a); break;
+                case "settings": case "setting": settingsPage(a, b); break;
+                case "copy": case "note": copy(a); break;
+                case "reminder": reminder(a, b); break;
+                case "upi": upi(); break;
+                case "navigate": case "navigation": navigate(a); break;
+                case "selfie": execute("camera", "front", ""); break;
                 case "share": {
                     host.botSay("शेयर करने के लिए ऐप चुनिए।");
                     Intent s = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, a);
@@ -333,11 +476,12 @@ final class ActionHandler {
     }
 
     private void searchContacts(final String kind, final String q, final String text) {
-        exec.execute(() -> {
+        searching = true;
+        bg(() -> {
             List<ContactsHelper.Contact> found;
             try { found = ContactsHelper.find(act, q); } catch (Exception e) { found = new ArrayList<>(); }
             final List<ContactsHelper.Contact> res = found;
-            main.post(() -> onFound(kind, q, text, res));
+            main.post(() -> { searching = false; if (!disposed) onFound(kind, q, text, res); });
         });
     }
 
@@ -413,13 +557,18 @@ final class ActionHandler {
                 "सीधे कॉल लगाने के लिए मुझे फ़ोन कॉल करने की इजाज़त चाहिए। मना करेंगे तो भी ठीक है — मैं नंबर भरकर डायलर खोल दूँगा।",
                 () -> {
                     host.botSay(label + " को कॉल लगा रहा हूँ 📞");
+                    launching = true;
                     main.postDelayed(() -> {
+                        launching = false;
+                        if (disposed) return;
+                        lastLaunch = "call";
                         Intent i = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
                         if (!start(i, null)) dial(number);
-                    }, 900);
+                    }, 700);
                 },
                 () -> {
                     host.botSay(label + " का नंबर डायलर में भर दिया है — हरा बटन दबाकर कॉल कीजिए।");
+                    lastLaunch = "call";
                     dial(number);
                 });
     }
@@ -491,24 +640,30 @@ final class ActionHandler {
     // ---- YouTube
     void playYoutube(final String query) {
         host.botSay("YouTube पर \"" + query + "\" चला रहा हूँ ▶️");
-        exec.execute(() -> {
+        launching = true;
+        boolean queued = bg(() -> {
             String id = null;
             try {
-                String html = AiClient.get("https://www.youtube.com/results?search_query=" + enc(query) + "&hl=hi&gl=IN");
-                Matcher m = Pattern.compile("\"videoId\"\\s*:\\s*\"([A-Za-z0-9_-]{11})\"").matcher(html);
-                if (m.find()) id = m.group(1);
+                // read only until the first video id (a few hundred KB at most) instead of the whole results page
+                id = AiClient.firstMatch("https://www.youtube.com/results?search_query=" + enc(query) + "&hl=hi&gl=IN",
+                        YT_ID, 1, 1500000, 6000);
             } catch (Exception ignored) { }
             final String vid = id;
-            main.postDelayed(() -> {
+            main.post(() -> {
+                launching = false;
+                if (disposed) return;
                 if (vid != null) {
                     Intent app = new Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:" + vid));
                     if (!start(app, null)) view("https://www.youtube.com/watch?v=" + vid);
                 } else {
                     ytSearchIntent(query);
                 }
-            }, 800);
+            });
         });
+        if (!queued) { launching = false; ytSearchIntent(query); }
     }
+
+    private static final Pattern YT_ID = Pattern.compile("\"videoId\"\\s*:\\s*\"([A-Za-z0-9_-]{11})\"");
 
     void ytSearch(String q) {
         host.botSay("YouTube पर खोज रहा हूँ: " + q);
@@ -664,7 +819,9 @@ final class ActionHandler {
                 if (start(ci, null)) return;
             }
         }
+        if ("upi".equals(target) || "bhim upi".equals(target)) { upi(); return; }
         Intent app = findApp(target);
+        if (app == null && !norm(targetRaw).equals(target)) app = findApp(targetRaw);
         if (app == null && "gallery".equals(target)) app = findApp("photos");
         if (app == null && "photos".equals(target)) app = findApp("gallery");
         if (app == null && "gpay".equals(target)) app = findApp("google pay");
@@ -672,6 +829,7 @@ final class ActionHandler {
         if (app != null) {
             host.botSay("\"" + app.getStringExtra("mitra_label") + "\" खोल रहा हूँ।");
             app.removeExtra("mitra_label");
+            lastLaunch = "app";
             start(app, null);
             return;
         }
@@ -685,85 +843,271 @@ final class ActionHandler {
         view("https://www.google.com/search?q=" + enc(targetRaw));
     }
 
-    private void launchFirst(String[] pkgs) {
-        if (pkgs == null) return;
-        for (String pk : pkgs) {
-            Intent li = act.getPackageManager().getLaunchIntentForPackage(pk);
-            if (li != null && start(li, null)) return;
-        }
+    // launcher apps, cached for the process (loading labels takes a few hundred ms on big phones)
+    private static volatile List<AppMatcher.App> appCache;
+    private static volatile long appCacheAt;
+    private static final Map<String, String> CLASS_OF = new HashMap<>();
+
+    static List<AppMatcher.App> launcherApps(Context c) {
+        List<AppMatcher.App> l = appCache;
+        if (l != null && System.currentTimeMillis() - appCacheAt < 10 * 60000L) return l;
+        List<AppMatcher.App> out = new ArrayList<>();
+        try {
+            PackageManager pm = c.getPackageManager();
+            Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+            for (ResolveInfo r : pm.queryIntentActivities(q, 0)) {
+                if (r.activityInfo == null || c.getPackageName().equals(r.activityInfo.packageName)) continue;
+                String label = String.valueOf(r.loadLabel(pm));
+                out.add(new AppMatcher.App(label, r.activityInfo.packageName));
+                synchronized (CLASS_OF) { CLASS_OF.put(r.activityInfo.packageName + "|" + label, r.activityInfo.name); }
+            }
+        } catch (Exception ignored) { }
+        appCache = out;
+        appCacheAt = System.currentTimeMillis();
+        return out;
     }
 
+    /** Fuzzy match on the launcher list (Hindi or English name, misspellings, package words). */
     private Intent findApp(String target) {
-        if (target.isEmpty()) return null;
-        PackageManager pm = act.getPackageManager();
-        Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> list = pm.queryIntentActivities(q, 0);
-        String tc = target.replace(" ", "");
-        ResolveInfo best = null;
-        int bestScore = 0;
-        String bestLabel = null;
-        for (ResolveInfo r : list) {
-            if (r.activityInfo == null || act.getPackageName().equals(r.activityInfo.packageName)) continue;
-            String label = String.valueOf(r.loadLabel(pm));
-            String l = label.toLowerCase(Locale.ROOT);
-            String lc = l.replace(" ", "");
-            String pkg = r.activityInfo.packageName.toLowerCase(Locale.ROOT);
-            int score = 0;
-            if (lc.equals(tc)) score = 100;
-            else if (lc.startsWith(tc)) score = 80;
-            else if (tc.length() >= 3 && lc.contains(tc)) score = 60;
-            else if (lc.length() >= 3 && tc.contains(lc)) score = 50;
-            else if (tc.length() >= 4 && pkg.contains(tc)) score = 40;
-            if (score > bestScore) { bestScore = score; best = r; bestLabel = label; }
-        }
-        if (best == null) return null;
-        Intent i = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                .setClassName(best.activityInfo.packageName, best.activityInfo.name)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        i.putExtra("mitra_label", bestLabel);
+        if (target == null || target.trim().isEmpty()) return null;
+        List<AppMatcher.App> apps = launcherApps(act);
+        int bi = AppMatcher.best(target, apps);
+        if (bi < 0) return null;
+        AppMatcher.App a = apps.get(bi);
+        String cls;
+        synchronized (CLASS_OF) { cls = CLASS_OF.get(a.pkg + "|" + a.label); }
+        Intent i = cls != null ? new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setClassName(a.pkg, cls)
+                : act.getPackageManager().getLaunchIntentForPackage(a.pkg);
+        if (i == null) return null;
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        i.putExtra("mitra_label", a.label);
         return i;
     }
 
     // ---- alarm
-    private static final Map<String, Integer> NUM = new HashMap<>();
-    static {
-        String[][] n = {{"एक", "1"}, {"दो", "2"}, {"तीन", "3"}, {"चार", "4"}, {"पांच", "5"}, {"पाँच", "5"}, {"छह", "6"}, {"छः", "6"}, {"छे", "6"},
-                {"सात", "7"}, {"आठ", "8"}, {"नौ", "9"}, {"दस", "10"}, {"ग्यारह", "11"}, {"बारह", "12"}, {"ek", "1"}, {"teen", "3"},
-                {"char", "4"}, {"chaar", "4"}, {"paanch", "5"}, {"panch", "5"}, {"chhe", "6"}, {"che", "6"}, {"saat", "7"}, {"aath", "8"}, {"nau", "9"},
-                {"das", "10"}, {"gyarah", "11"}, {"barah", "12"}, {"baarah", "12"}};
-        for (String[] p : n) NUM.put(p[0], Integer.parseInt(p[1]));
-    }
-
-    void setAlarmFromText(String t) {
-        String s = " " + t + " ";
-        for (Map.Entry<String, Integer> e : NUM.entrySet()) s = s.replace(" " + e.getKey() + " ", " " + e.getValue() + " ");
-        Matcher m = Pattern.compile("(\\d{1,2})(?:\\s*[:.]\\s*(\\d{2}))?").matcher(s);
-        if (!m.find()) {
-            host.botSay("अलार्म ऐप खोल रहा हूँ — समय चुन लीजिए। अगली बार बोलिए, जैसे \"सुबह 6 बजे का अलार्म लगाओ\"।");
-            start(new Intent(AlarmClock.ACTION_SHOW_ALARMS), "अलार्म ऐप नहीं मिला।");
-            return;
+    void setAlarmFromText(String raw) {
+        int rel = TimeParse.relativeMinutes(raw);
+        int h, min;
+        if (rel > 0) {
+            java.util.Calendar k = java.util.Calendar.getInstance();
+            k.add(java.util.Calendar.MINUTE, rel);
+            h = k.get(java.util.Calendar.HOUR_OF_DAY);
+            min = k.get(java.util.Calendar.MINUTE);
+        } else {
+            int[] c = TimeParse.clock(raw);
+            if (c == null) {
+                host.botSay("अलार्म ऐप खोल रहा हूँ — समय चुन लीजिए। अगली बार बोलिए, जैसे \"सुबह 6 बजे का अलार्म लगाओ\"।");
+                start(new Intent(AlarmClock.ACTION_SHOW_ALARMS), "अलार्म ऐप नहीं मिला।");
+                return;
+            }
+            h = c[0];
+            min = c[1];
         }
-        int h = Integer.parseInt(m.group(1));
-        int min = m.group(2) == null ? 0 : Integer.parseInt(m.group(2));
-        if (has(t, "साढ़े", "साढे", "sadhe", "saadhe")) min = 30;
-        else if (has(t, "सवा", "sawa", "sava")) min = 15;
-        else if (has(t, "पौने", "paune", "pone")) { min = 45; h = h - 1; if (h <= 0) h += 12; }
-        boolean pm = has(t, "शाम", "sham", "shaam", "evening", "pm", "p.m.", "दोपहर", "dopahar", "dopehar", "afternoon");
-        boolean night = has(t, "रात", "raat", "rat", "night");
-        boolean am = has(t, "सुबह", "subah", "subha", "morning", "am", "a.m.", "सवेरे", "savere");
-        if (h > 23 || min > 59) { host.botSay("समय समझ नहीं आया, फिर से बोलिए।"); return; }
-        if (pm && h < 12) h += 12;
-        if (night) { if (h >= 6 && h < 12) h += 12; else if (h == 12) h = 0; }
-        if (am && h == 12) h = 0;
         Intent i = new Intent(AlarmClock.ACTION_SET_ALARM)
                 .putExtra(AlarmClock.EXTRA_HOUR, h)
                 .putExtra(AlarmClock.EXTRA_MINUTES, min)
                 .putExtra(AlarmClock.EXTRA_MESSAGE, "मित्र अलार्म")
                 .putExtra(AlarmClock.EXTRA_SKIP_UI, false);
+        host.botSay(clockText(h, min) + " बजे का अलार्म लगा रहा हूँ ⏰");
+        start(i, "अलार्म ऐप नहीं मिला।");
+    }
+
+    static String clockText(int h, int min) {
         int h12 = h % 12 == 0 ? 12 : h % 12;
         String part = h < 4 ? "रात" : h < 12 ? "सुबह" : h < 16 ? "दोपहर" : h < 20 ? "शाम" : "रात";
-        host.botSay(part + " " + h12 + ":" + (min < 10 ? "0" + min : String.valueOf(min)) + " बजे का अलार्म लगा रहा हूँ ⏰");
-        start(i, "अलार्म ऐप नहीं मिला।");
+        return part + " " + h12 + ":" + (min < 10 ? "0" + min : String.valueOf(min));
+    }
+
+    // ---- reminder (calendar event with an alert; no calendar permission needed — the calendar app saves it)
+    void reminder(String raw, String explicitWhen) {
+        java.util.Calendar now = java.util.Calendar.getInstance();
+        long at = TimeParse.when(explicitWhen.isEmpty() ? raw : explicitWhen + " " + raw, now);
+        String title = TimeParse.reminderTitle(raw);
+        if (title.isEmpty()) title = "मित्र रिमाइंडर";
+        boolean timed = at > 0;
+        if (!timed) at = now.getTimeInMillis() + 3600000L;
+        Intent i = new Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
+                .putExtra(CalendarContract.Events.TITLE, title)
+                .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, at)
+                .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, at + 15 * 60000L)
+                .putExtra(CalendarContract.Events.HAS_ALARM, 1)
+                .putExtra(CalendarContract.Events.DESCRIPTION, "मित्र से बनाया गया रिमाइंडर");
+        java.util.Calendar k = java.util.Calendar.getInstance();
+        k.setTimeInMillis(at);
+        int days = k.get(java.util.Calendar.DAY_OF_YEAR) - now.get(java.util.Calendar.DAY_OF_YEAR);
+        String day = days == 0 ? "आज" : days == 1 ? "कल" : days == 2 ? "परसों" : k.get(java.util.Calendar.DAY_OF_MONTH) + " तारीख़ को";
+        host.botSay(timed ? day + " " + clockText(k.get(java.util.Calendar.HOUR_OF_DAY), k.get(java.util.Calendar.MINUTE)) + " बजे का रिमाइंडर: \"" + title + "\" — कैलेंडर में Save दबाइए।"
+                : "रिमाइंडर \"" + title + "\" कैलेंडर में खोल रहा हूँ — समय चुनकर Save दबाइए।");
+        if (start(i, null)) return;
+        // no calendar app: fall back to an alarm with the title (time only)
+        Intent al = new Intent(AlarmClock.ACTION_SET_ALARM).putExtra(AlarmClock.EXTRA_HOUR, k.get(java.util.Calendar.HOUR_OF_DAY))
+                .putExtra(AlarmClock.EXTRA_MINUTES, k.get(java.util.Calendar.MINUTE)).putExtra(AlarmClock.EXTRA_MESSAGE, title)
+                .putExtra(AlarmClock.EXTRA_SKIP_UI, false);
+        start(al, "कैलेंडर या अलार्म ऐप नहीं मिला।");
+    }
+
+    // ---- notes → clipboard
+    void copy(String text) {
+        if (text == null || text.trim().isEmpty()) { host.botSay("क्या नोट करूँ? बोलिए, जैसे \"नोट कर लो कि कल 5 बजे मीटिंग है\"।"); return; }
+        try {
+            ClipboardManager cm = (ClipboardManager) act.getSystemService(Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("मित्र नोट", text.trim()));
+            host.botSay("नोट कर लिया और कॉपी कर दिया ✅ — \"" + text.trim() + "\"। कहीं भी देर तक दबाकर Paste कर सकते हैं।");
+        } catch (Exception e) {
+            host.botSay("कॉपी नहीं हो पाया।");
+        }
+    }
+
+    // ---- battery
+    String batteryText() {
+        try {
+            Intent b = act.getApplicationContext().registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            int level = -1;
+            if (Build.VERSION.SDK_INT >= 21) {
+                BatteryManager bm = (BatteryManager) act.getSystemService(Context.BATTERY_SERVICE);
+                if (bm != null) level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            }
+            if ((level <= 0 || level > 100) && b != null) {
+                int l = b.getIntExtra(BatteryManager.EXTRA_LEVEL, -1), sc = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                if (l >= 0 && sc > 0) level = Math.round(l * 100f / sc);
+            }
+            int st = b == null ? -1 : b.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL;
+            if (level < 0) return "बैटरी की जानकारी नहीं मिल पाई।";
+            return "बैटरी " + level + "% है" + (charging ? " और चार्ज हो रही है 🔌" : level <= 20 ? " — चार्जर लगा लीजिए 🔋" : " 🔋") + "।";
+        } catch (Exception e) {
+            return "बैटरी की जानकारी नहीं मिल पाई।";
+        }
+    }
+
+    // ---- volume / ringer (no permission needed)
+    void volume(String how) {
+        AudioManager am = (AudioManager) act.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) { host.botSay("आवाज़ नहीं बदल पाया।"); return; }
+        int flags = AudioManager.FLAG_SHOW_UI;
+        int stream = how.startsWith("ring") ? AudioManager.STREAM_RING : AudioManager.STREAM_MUSIC;
+        try {
+            switch (how) {
+                case "up": case "ring_up":
+                    am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, flags);
+                    am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, 0);
+                    break;
+                case "down": case "ring_down":
+                    am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, flags);
+                    am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, 0);
+                    break;
+                case "max": am.setStreamVolume(stream, am.getStreamMaxVolume(stream), flags); break;
+                case "mute":
+                    if (Build.VERSION.SDK_INT >= 23) am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags);
+                    else am.setStreamVolume(stream, 0, flags);
+                    break;
+                case "unmute":
+                    if (Build.VERSION.SDK_INT >= 23) am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags);
+                    if (am.getStreamVolume(stream) == 0) am.setStreamVolume(stream, Math.max(1, am.getStreamMaxVolume(stream) / 2), flags);
+                    break;
+                default: am.adjustStreamVolume(stream, AudioManager.ADJUST_SAME, flags);
+            }
+            int v = am.getStreamVolume(stream), max = Math.max(1, am.getStreamMaxVolume(stream));
+            String what = stream == AudioManager.STREAM_RING ? "रिंगटोन की आवाज़" : "आवाज़";
+            if ("mute".equals(how)) host.botSay(what + " बंद कर दी 🔇");
+            else host.botSay(what + " अब " + Math.round(v * 100f / max) + "% है 🔊");
+        } catch (SecurityException e) {
+            host.botSay("फ़ोन 'Do Not Disturb' में है, इसलिए आवाज़ नहीं बदल पाया — साउंड सेटिंग खोल रहा हूँ।");
+            settingsPage("sound", "");
+        }
+    }
+
+    void ringer(String mode) {
+        AudioManager am = (AudioManager) act.getSystemService(Context.AUDIO_SERVICE);
+        try {
+            if ("vibrate".equals(mode)) { am.setRingerMode(AudioManager.RINGER_MODE_VIBRATE); host.botSay("फ़ोन वाइब्रेट पर कर दिया 📳"); return; }
+            if ("normal".equals(mode)) { am.setRingerMode(AudioManager.RINGER_MODE_NORMAL); host.botSay("फ़ोन की घंटी वापस चालू कर दी 🔔"); return; }
+            am.setRingerMode(AudioManager.RINGER_MODE_SILENT);
+            host.botSay("फ़ोन साइलेंट कर दिया 🔕");
+        } catch (Exception e) {
+            // Android 7+: silent mode needs Do-Not-Disturb access; vibrate is the closest allowed choice
+            try {
+                if (!"normal".equals(mode)) { am.setRingerMode(AudioManager.RINGER_MODE_VIBRATE); host.botSay("साइलेंट के लिए फ़ोन की इजाज़त चाहिए, इसलिए वाइब्रेट पर कर दिया 📳"); return; }
+            } catch (Exception ignored) { }
+            host.botSay("यह बदलने के लिए साउंड सेटिंग खोल रहा हूँ।");
+            settingsPage("sound", "");
+        }
+    }
+
+    // ---- settings screens (Android does not let apps flip wifi/bluetooth/data/brightness themselves on new phones)
+    void settingsPage(String page, String dir) {
+        String act1;
+        String say;
+        switch (page == null ? "" : page) {
+            case "wifi":
+                say = "Wi-Fi की सेटिंग खोल रहा हूँ — वहाँ " + onOff(dir) + " कर लीजिए।";
+                if (Build.VERSION.SDK_INT >= 29 && start(new Intent(Settings.Panel.ACTION_WIFI), null)) { host.botSay(say); return; }
+                act1 = Settings.ACTION_WIFI_SETTINGS; break;
+            case "bluetooth": say = "ब्लूटूथ की सेटिंग खोल रहा हूँ — वहाँ " + onOff(dir) + " कर लीजिए।"; act1 = Settings.ACTION_BLUETOOTH_SETTINGS; break;
+            case "display": say = "स्क्रीन की चमक (Brightness) की सेटिंग खोल रहा हूँ" + ("up".equals(dir) ? " — स्लाइडर दाईं ओर खिसकाइए।" : "down".equals(dir) ? " — स्लाइडर बाईं ओर खिसकाइए।" : "।") + " ऊपर से नीचे स्वाइप करके भी बदल सकते हैं।";
+                act1 = Settings.ACTION_DISPLAY_SETTINGS; break;
+            case "location": say = "लोकेशन (GPS) की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_LOCATION_SOURCE_SETTINGS; break;
+            case "airplane": say = "फ़्लाइट मोड की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_AIRPLANE_MODE_SETTINGS; break;
+            case "data":
+                say = "मोबाइल डेटा / इंटरनेट की सेटिंग खोल रहा हूँ।";
+                if (Build.VERSION.SDK_INT >= 29 && start(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY), null)) { host.botSay(say); return; }
+                act1 = Settings.ACTION_DATA_ROAMING_SETTINGS; break;
+            case "hotspot": say = "हॉटस्पॉट की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_WIRELESS_SETTINGS; break;
+            case "battery": say = "बैटरी सेवर की सेटिंग खोल रहा हूँ।"; act1 = Build.VERSION.SDK_INT >= 22 ? Settings.ACTION_BATTERY_SAVER_SETTINGS : Settings.ACTION_SETTINGS; break;
+            case "sound": say = "साउंड सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_SOUND_SETTINGS; break;
+            case "notifications": say = "नोटिफ़िकेशन सेटिंग खोल रहा हूँ।"; act1 = Build.VERSION.SDK_INT >= 26 ? Settings.ACTION_APP_NOTIFICATION_SETTINGS : Settings.ACTION_SETTINGS; break;
+            case "apps": say = "ऐप्स की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_APPLICATION_SETTINGS; break;
+            case "storage": say = "स्टोरेज की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_INTERNAL_STORAGE_SETTINGS; break;
+            case "language": say = "भाषा और कीबोर्ड की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_LOCALE_SETTINGS; break;
+            case "datetime": say = "तारीख़ और समय की सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_DATE_SETTINGS; break;
+            case "security": say = "सुरक्षा सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_SECURITY_SETTINGS; break;
+            case "accessibility": say = "सुलभता (Accessibility) सेटिंग खोल रहा हूँ।"; act1 = Settings.ACTION_ACCESSIBILITY_SETTINGS; break;
+            case "mitra": host.botSay("मित्र की सेटिंग्स खोल रहा हूँ।"); start(new Intent(act, SettingsActivity.class), null); return;
+            default: say = "सेटिंग्स खोल रहा हूँ।"; act1 = Settings.ACTION_SETTINGS;
+        }
+        host.botSay(say);
+        Intent i = new Intent(act1);
+        if ("notifications".equals(page) && Build.VERSION.SDK_INT >= 26) i.putExtra(Settings.EXTRA_APP_PACKAGE, act.getPackageName());
+        if (!start(i, null)) start(new Intent(Settings.ACTION_SETTINGS), "सेटिंग्स नहीं खुल पाईं।");
+    }
+
+    private static String onOff(String dir) { return "off".equals(dir) ? "बंद" : "on".equals(dir) ? "चालू" : "चालू/बंद"; }
+
+    // ---- UPI apps: open only (Mitra never makes payments)
+    private static final String[][] UPI_APPS = {{"com.phonepe.app", "PhonePe"}, {"com.google.android.apps.nbu.paisa.user", "Google Pay"},
+            {"net.one97.paytm", "Paytm"}, {"in.org.npci.upiapp", "BHIM"}, {"in.amazon.mShop.android.shopping", "Amazon Pay"},
+            {"com.mobikwik_new", "MobiKwik"}, {"com.dreamplug.androidapp", "CRED"}, {"com.myairtelapp", "Airtel Thanks"}};
+
+    void upi() {
+        PackageManager pm = act.getPackageManager();
+        final List<String[]> found = new ArrayList<>();
+        for (String[] u : UPI_APPS) if (pm.getLaunchIntentForPackage(u[0]) != null) found.add(u);
+        if (found.isEmpty()) {
+            host.botSay("फ़ोन में कोई UPI ऐप नहीं मिला। Play Store / Indus Appstore से PhonePe, Google Pay या BHIM इंस्टॉल कर सकते हैं।");
+            return;
+        }
+        String pref = prefs.getString("upi_app", "");
+        for (String[] u : found) if (u[0].equals(pref) || found.size() == 1) { openUpi(u); return; }
+        List<Option> ops = new ArrayList<>();
+        for (final String[] u : found) ops.add(new Option("💳 " + u[1], null, () -> { prefs.edit().putString("upi_app", u[0]).apply(); openUpi(u); }));
+        ask("कौन सा UPI ऐप खोलूँ? (पेमेंट आप खुद ऐप में करेंगे)", ops, "upi", "");
+    }
+
+    private void openUpi(String[] u) {
+        Intent li = act.getPackageManager().getLaunchIntentForPackage(u[0]);
+        if (li == null) { host.botSay(u[1] + " नहीं मिला।"); return; }
+        host.botSay(u[1] + " खोल रहा हूँ — पेमेंट आप खुद ऐप में PIN डालकर करें। 🔒");
+        start(li, null);
+    }
+
+    // ---- navigation
+    void navigate(String place) {
+        if (place == null || place.trim().isEmpty()) { execute("maps", "", ""); return; }
+        host.botSay(place + " का रास्ता शुरू कर रहा हूँ 🧭");
+        Intent n = new Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + enc(place)));
+        if (start(n, null)) return;
+        if (start(new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + enc(place))), null)) return;
+        view("https://www.google.com/maps/dir/?api=1&destination=" + enc(place));
     }
 
     // ---- torch

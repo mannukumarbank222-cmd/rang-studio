@@ -17,7 +17,7 @@ final class Lang {
     private static final String HI_G = "नमस्ते, मैं मित्र हूँ, आपका मित्र। आप मुझसे कोई भी सवाल पूछ सकते हैं और कुछ भी काम करा सकते हैं।";
 
     static final Lang[] ALL = {
-            new Lang("auto", "अपने-आप (Auto) — जिस भाषा में बोलें", "hi-IN", "hi-IN", null, HI_G,
+            new Lang("auto", "अपने-आप (Auto) — आपकी भाषा पहचानकर", "hi-IN", "hi-IN", null, HI_G,
                     "कुछ भी पूछिए या बोलिए…", "🎙️ सुन रहा हूँ… बोलिए", "आपका AI मित्र • ऑनलाइन", "लिख रहा है…"),
             new Lang("hi", "हिंदी (Hindi)", "hi-IN", "hi-IN", "Hindi (Devanagari script)", HI_G,
                     "कुछ भी पूछिए या बोलिए…", "🎙️ सुन रहा हूँ… बोलिए", "आपका AI मित्र • ऑनलाइन", "लिख रहा है…"),
@@ -92,6 +92,27 @@ final class Lang {
         return ALL[0];
     }
 
+    /**
+     * System-prompt language line for this message. Auto mode detects the language/script of what the user just
+     * said or typed ({@link LangDetect}); a language chosen in Settings always wins (the override).
+     */
+    static String aiLine(Lang chosen, String userText) {
+        if (chosen != null && chosen.aiName != null) return chosen.aiInstruction();
+        return LangDetect.instruction(LangDetect.detect(userText));
+    }
+
+    /** Recognizer language: the chosen one, or in Auto mode the language the user last spoke/typed (Hindi at first). */
+    static String srLocale(Lang chosen, String autoLast) {
+        if (chosen != null && chosen.aiName != null) return chosen.sr;
+        return autoLast == null || autoLast.isEmpty() ? "hi-IN" : autoLast;
+    }
+
+    /** Auto mode: remember which recognizer language fits what the user just said (returns the value to store). */
+    static String learn(String current, String userText) {
+        if (userText == null) return current;
+        return LangDetect.nextListenLocale(current, LangDetect.detect(userText), userText.trim().split("\\s+").length);
+    }
+
     /** Extra system-prompt line for the chosen language (null for Auto). */
     String aiInstruction() {
         if (aiName == null) return null;
@@ -130,8 +151,13 @@ final class Lang {
             case 7: return "kn-IN";
             case 8: return "ml-IN";
             case 9: return "ur-IN";
-            default: // Latin: Hinglish reads fine with the Hindi voice; English mode uses the English voice
-                return "en".equals(chosen.id) ? "en-IN" : (count[0] > 0 ? "hi-IN" : chosen.id.equals("auto") || chosen.tts.equals("hi-IN") ? "hi-IN" : "en-IN");
+            default: { // Latin: Hinglish reads best with the Hindi voice; real English with the Indian-English voice
+                if ("en".equals(chosen.id)) return "en-IN";
+                if (count[0] > 0) return "hi-IN";
+                LangDetect.Result r = LangDetect.detect(text);
+                if (r != null && "en".equals(r.id) && !r.roman) return "en-IN";
+                return chosen.id.equals("auto") || chosen.tts.equals("hi-IN") ? "hi-IN" : "en-IN";
+            }
         }
     }
 }

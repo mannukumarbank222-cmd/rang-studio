@@ -225,7 +225,7 @@ public class WakeSetupActivity extends Activity {
                 modelState.setText("✅ मॉडल तैयार है — ‘मित्र’ फ़ोन पर ही पहचाना जाएगा");
                 bar.setProgress(100);
                 try { ((android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(WakeService.NOTIF_MODEL); } catch (Exception ignored) { }
-                if (WakeService.enabled(this) && WakeService.hasMic(this)) {
+                if (!isFinishing() && WakeService.enabled(this) && WakeService.hasMic(this)) {
                     WakeService.stop(this); WakeService.start(this);
                     Toast.makeText(this, "हमेशा सुनें चालू ✅ — ‘मित्र’ बोलकर देखें", Toast.LENGTH_LONG).show();
                 }
@@ -235,11 +235,13 @@ public class WakeSetupActivity extends Activity {
 
     private void battery() {
         if (Build.VERSION.SDK_INT < 23) return;
-        if (tryStart(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())))) {
-            Toast.makeText(this, "‘Allow / अनुमति दें’ दबाएँ। Redmi में बैटरी सेवर › ‘No restrictions’ भी चुनें।", Toast.LENGTH_LONG).show();
+        // v4.0: no REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission (store policy) — open the system list instead
+        if (tryStart(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))) {
+            Toast.makeText(this, "सूची में ‘सभी ऐप्स’ चुनकर ‘मित्र’ पर ‘Don't optimise / ऑप्टिमाइज़ न करें’ चुनें। Redmi में ऐप जानकारी › बैटरी सेवर › ‘No restrictions’।",
+                    Toast.LENGTH_LONG).show();
             return;
         }
-        if (!tryStart(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))) appDetails();
+        appDetails();
     }
 
     private void autostart() {

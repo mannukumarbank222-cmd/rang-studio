@@ -78,6 +78,7 @@ public class WakeService extends Service {
     }
 
     static void start(Context c) {
+        if (!hasMic(c)) return; // a microphone service without the mic permission would crash on Android 14
         // Wake word runs only on the offline model; without it Mitra stays quiet and asks once to download it.
         if (!ModelManager.ready(c)) { promptModel(c, false); return; }
         Intent i = new Intent(c, WakeService.class).setAction(ACT_START);
@@ -388,9 +389,11 @@ public class WakeService extends Service {
 
     /** Two-pass check of one speech segment. @return command text ("" for none) when the wake word started it; else null */
     private String check(Model model, String grammarJson, byte[] audio, double segStartSec) {
-        double thr = WakeWord.threshold(prefs.getInt("wake_sens", 1));
+        long now = System.currentTimeMillis();
+        double thr = WakeGuard.GLOBAL.threshold(WakeWord.threshold(prefs.getInt("wake_sens", 1)), now);
         List<WakeWord.W> g = words(grammarJson);
         if (!WakeWord.hasCandidate(g, thr)) return null;
+        if (LiveModels.rms(audio, audio.length) < 120) return null; // near-silent segment: noise, not a voice
         // Vosk word times count from the recognizer start; make them relative to this segment
         boolean cumulative = false;
         for (WakeWord.W w : g) if (w.start >= segStartSec - 0.3) cumulative = true;
@@ -407,8 +410,17 @@ public class WakeService extends Service {
         } finally {
             if (f != null) f.close();
         }
-        if (full.isEmpty()) return "";
-        return WakeWord.evaluate(rel, full, thr);
+        String res;
+        if (full.isEmpty()) {
+            // the full decoder heard nothing: accept only a very confident grammar match
+            double best = 0;
+            for (WakeWord.W w : g) if (WakeWord.isWake(w.w)) best = Math.max(best, w.conf);
+            res = best >= WakeWord.SURE ? "" : null;
+        } else {
+            res = WakeWord.evaluate(rel, full, thr);
+        }
+        if (res != null && !WakeGuard.GLOBAL.allow(now)) return null; // cool-down after the last wake
+        return res;
     }
 
     // ------------------------------------------------------------------ wake

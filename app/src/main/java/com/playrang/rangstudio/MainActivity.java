@@ -47,8 +47,8 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity implements ActionHandler.Host {
 
     static final String GREETING = "नमस्ते, मैं मित्र हूँ, आपका मित्र। आप मुझसे कोई भी सवाल पूछ सकते हैं और कुछ भी काम करा सकते हैं।";
-    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "आज की तारीख", "मुझे एक चुटकुला सुनाओ", "WhatsApp खोलो",
-            "सुबह 6 बजे का अलार्म लगाओ", "टॉर्च जलाओ", "अभी कितने बजे हैं?", "पढ़ाई में मन कैसे लगाएं?"};
+    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "कल सुबह 7 बजे याद दिलाना कि दवा लेनी है", "मुझे एक चुटकुला सुनाओ",
+            "टॉर्च जलाओ और आवाज़ बढ़ाओ", "सुबह 6 बजे का अलार्म लगाओ", "बैटरी कितनी है?", "WhatsApp खोलो", "पढ़ाई में मन कैसे लगाएं?", "250 का 18 प्रतिशत कितना है"};
     private static final int REQ_MIC = 7;
     static final String EXTRA_START_WAKE = "start_wake";
 
@@ -72,6 +72,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private SilentMic quiet;
     private String lastUtt;
     private int utter;
+    private final SilentMic.EarlyStop early = new SilentMic.EarlyStop();
+    private String lastUserText = "";
 
     private SharedPreferences prefs;
     private ActionHandler actions;
@@ -89,6 +91,10 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         initTts();
         addBot(lang().greeting);
         speak(lang().greeting);
+        // v4.0 speed: warm the AI connection and the recognizer while the greeting plays
+        final boolean gem = geminiKey().trim().length() > 10;
+        try { exec.execute(() -> AiClient.warmUp(gem)); } catch (Exception ignored) { }
+        main.postDelayed(this::prewarmRecognizer, 1200);
         if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_START_WAKE, false)) WakeService.start(this);
         else WakeService.startIfEnabled(this);
         main.postDelayed(this::offerWake, 2500);
@@ -99,6 +105,18 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         super.onNewIntent(i);
         if (i != null && i.getBooleanExtra(EXTRA_START_WAKE, false)) WakeService.start(this);
     }
+
+    private void prewarmRecognizer() {
+        if (isFinishing() || sr != null) return;
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return;
+        try {
+            if (!SpeechRecognizer.isRecognitionAvailable(this)) return;
+            sr = SpeechRecognizer.createSpeechRecognizer(this); // binds the recognition service now, not on the first tap
+            sr.setRecognitionListener(new Listener());
+        } catch (Exception e) { sr = null; }
+    }
+
+    private String autoSr() { return prefs.getString("auto_sr", "hi-IN"); }
 
     private void openLive() {
         if (tts != null) tts.stop();
@@ -426,7 +444,11 @@ public class MainActivity extends Activity implements ActionHandler.Host {
 
     private void submit(String text) {
         if (tts != null) tts.stop();
+        if (quiet != null) quiet.unmuteNow(); // an instant local answer must not be swallowed by the mic's beep-mute
         addBubble(text, true);
+        lastUserText = text;
+        String learned = Lang.learn(autoSr(), text);
+        if (learned != null && !learned.equals(autoSr())) prefs.edit().putString("auto_sr", learned).apply();
         chipBar.setVisibility(View.GONE);
         if (convMode && Convo.isStop(text)) { endConversation(false); return; }
         try {
@@ -475,7 +497,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         final boolean[] spoke = {false};
         final TextView[] live = {null};
         exec.execute(() -> {
-            final AiClient.Result r = AiClient.askStream(snapshot, key, model, lang().aiInstruction(), 45, delta -> {
+            final AiClient.Result r = AiClient.askStream(snapshot, key, model, Lang.aiLine(lang(), lastUserText), 20, delta -> {
                 final List<String> ready = buf.push(delta);
                 final String vis = clean(buf.visible());
                 main.post(() -> {
@@ -583,6 +605,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 .replace("*", "").replace("#", "").replace("•", "").trim();
         if (s.isEmpty()) return;
         if (!ttsReady || tts == null) { pendingSpeech = pendingSpeech == null ? s : pendingSpeech + " " + s; return; }
+        if (quiet != null && !listening) quiet.unmuteNow();
         useVoiceFor(s);
         lastUtt = "mitra" + (utter++);
         tts.speak(s, TextToSpeech.QUEUE_ADD, null, lastUtt);
@@ -627,6 +650,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 .replace("*", "").replace("#", "").replace("•", "").trim();
         if (s.isEmpty()) return;
         if (!ttsReady || tts == null) { pendingSpeech = s; return; }
+        if (quiet != null && !listening) quiet.unmuteNow();
         useVoiceFor(s);
         lastUtt = "mitra" + (utter++);
         tts.speak(s, TextToSpeech.QUEUE_FLUSH, null, lastUtt);
@@ -655,18 +679,17 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     // ------------------------------------------------------------------ speech input
     /** In-app recognizer only (never the Google popup), quiet and preferring on-device recognition. */
     private Intent recognizerIntent() {
-        Intent i = SilentMic.intent(lang().sr, 1);
-        i.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", new String[]{"hi-IN", "en-IN"});
-        return i;
+        return SilentMic.intent(Lang.srLocale(lang(), autoSr()), 1);
     }
 
     private void startListening() {
         if (tts != null) tts.stop();
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+            askMic();
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) { noRecognizer(); return; }
+        early.reset();
         try {
             if (sr == null) {
                 sr = SpeechRecognizer.createSpeechRecognizer(this);
@@ -688,12 +711,29 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         }
     }
 
+    /** Explains in Hindi why the mic is needed, then shows Android's permission prompt. */
+    private void askMic() {
+        if (prefs.getBoolean("mic_explained", false)) { requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC); return; }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("🎤 माइक की अनुमति")
+                .setMessage("बोलकर सवाल पूछने और काम कराने के लिए मित्र को माइक चाहिए। आपकी आवाज़ सिर्फ़ उसी समय टेक्स्ट में बदली जाती है जब आप 🎤 दबाते हैं — "
+                        + "मित्र आवाज़ रिकॉर्ड या सेव नहीं करता।")
+                .setPositiveButton("ठीक है", (d, w) -> {
+                    prefs.edit().putBoolean("mic_explained", true).apply();
+                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+                })
+                .setNegativeButton("अभी नहीं", null)
+                .show();
+    }
+
     private void stopListening() {
+        early.reset();
         if (sr != null) sr.stopListening();
         endListeningUi();
     }
 
     private void endListeningUi() {
+        early.reset();
         listening = false;
         if (!convMode) WakeService.resume(this, "ui");
         input.setHint(lang().hint);
@@ -759,7 +799,12 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         }
         public void onPartialResults(Bundle partial) {
             ArrayList<String> r = partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (r != null && !r.isEmpty()) { input.setText(r.get(0)); input.setSelection(input.getText().length()); }
+            if (r != null && !r.isEmpty()) {
+                input.setText(r.get(0));
+                input.setSelection(input.getText().length());
+                // a complete command already? finish now instead of waiting for the silence timeout
+                early.onPartial(r.get(0), () -> { if (listening && sr != null) try { sr.stopListening(); } catch (Exception ignored) { } });
+            }
         }
         public void onEvent(int t, Bundle p) { }
     }
@@ -783,12 +828,14 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (convMode) WakeService.pause(this, "ui", 0);
         if (convMode && !busy && !listening && (tts == null || !tts.isSpeaking())) main.postDelayed(this::convListen, 600);
         if (muteBtn != null) muteBtn.setText(isMuted() ? "🔇" : "🔊");
+        actions.resumeQueue(); // multi-step: continue after a call / another app
         if (input != null && !listening) { input.setHint(lang().hint); statusText.setText(lang().online); }
         ttsLocale = null;
         if (prefs.getBoolean("clear_chat", false)) {
             prefs.edit().putBoolean("clear_chat", false).apply();
             Convo.clear();
             actions.reset();
+            ActionHandler.clearQueue();
             while (chat.getChildCount() > 1) chat.removeViewAt(1);
             chipBar.setVisibility(View.VISIBLE);
             addBot(lang().greeting);
@@ -807,6 +854,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     @Override
     protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
+        early.reset();
+        actions.dispose();
         if (quiet != null) quiet.unmuteNow();
         if (sr != null) { sr.destroy(); sr = null; }
         if (tts != null) { tts.stop(); tts.shutdown(); }

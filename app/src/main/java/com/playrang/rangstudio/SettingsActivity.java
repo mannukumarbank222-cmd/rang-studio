@@ -87,7 +87,7 @@ public class SettingsActivity extends Activity {
         TextView name = text("मित्र (Mitra)", 22, Ui.TEXT, true);
         name.setGravity(Gravity.CENTER);
         about.addView(name);
-        String ver = "2.2";
+        String ver = "4.0";
         try {
             PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             ver = pi.versionName + " (" + pi.versionCode + ")";
@@ -107,8 +107,9 @@ public class SettingsActivity extends Activity {
         // Language
         LinearLayout lc = card();
         lc.addView(text("भाषा चुनें / Language", 16, Ui.TEXT, true));
-        lc.addView(text("मित्र आपकी भाषा में सुनेगा और जवाब देगा। \"अपने-आप\" में जिस भाषा में आप लिखें/बोलें, उसी में जवाब मिलेगा "
-                + "(बोलकर पूछने के लिए हिंदी पहचान)। भोजपुरी, मैथिली, मगही, हरियाणवी के लिए हिंदी आवाज़-पहचान इस्तेमाल होती है।", 13f, Ui.MUTED, false));
+        lc.addView(text("\"अपने-आप\" में मित्र हर बार आपकी भाषा और लिपि पहचानता है (हिंदी, Hinglish, English, বাংলা, தமிழ், తెలుగు, मराठी, ગુજરાતી, "
+                + "ਪੰਜਾਬੀ, ಕನ್ನಡ, മലയാളം, ଓଡ଼ିଆ, اردو …), उसी भाषा में जवाब देता है, उसी भाषा की आवाज़ में बोलता है और अगली बार उसी भाषा में सुनता है। "
+                + "कोई एक भाषा चुनेंगे तो सुनना, बोलना और जवाब हमेशा उसी में होगा। भोजपुरी, मैथिली, मगही, हरियाणवी के लिए हिंदी आवाज़-पहचान इस्तेमाल होती है।", 13f, Ui.MUTED, false));
         final TextView cur = button("🌐  " + Lang.get(prefs.getString("lang", "auto")).label, false);
         LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         ll.topMargin = dp(10);
@@ -122,7 +123,7 @@ public class SettingsActivity extends Activity {
                     .setTitle("भाषा चुनें")
                     .setSingleChoiceItems(labels, sel, (d, which) -> {
                         Lang l = Lang.ALL[which];
-                        prefs.edit().putString("lang", l.id).apply();
+                        prefs.edit().putString("lang", l.id).remove("auto_sr").apply();
                         cur.setText("🌐  " + l.label);
                         Toast.makeText(this, l.label + " ✅", Toast.LENGTH_SHORT).show();
                         d.dismiss();

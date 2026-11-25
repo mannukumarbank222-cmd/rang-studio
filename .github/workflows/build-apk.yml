@@ -40,7 +40,7 @@ jobs:
         with: { name: Mitra-APK, path: Mitra.apk }
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: mitra-v3.1-build-${{ github.run_number }}
-          name: Mitra v3.1 (build ${{ github.run_number }})
-          body: "Mitra v3.1 - 🔇 बार-बार माइक/‘टुन-टुन’ बीप ठीक: ‘हमेशा सुनें’ अब सिर्फ़ ऑफ़लाइन मॉडल से चुपचाप सुनता है (Google mic का बार-बार चालू होना बंद), Google mic popup कभी नहीं खुलता, बोलते समय बीप की आवाज़ दबाई जाती है, कुछ न सुनाई दे तो 1s/3s रुककर 3 बार के बाद रुक जाता है। बैटरी बचत: स्क्रीन बंद पर सुनना रुकता है (सेटिंग्स में ‘स्क्रीन बंद पर भी सुनें’)। पहली बार सेटिंग्स › हमेशा सुनें › सेटअप में आवाज़ मॉडल (~44 MB) डाउनलोड करें। Signed with the same key, installs as an update."
+          tag_name: mitra-v4.0-build-${{ github.run_number }}
+          name: Mitra v4.0 (build ${{ github.run_number }})
+          body: "Mitra v4.0 (versionCode 7) — PhonePe Indus Appstore release. ✅ ज़्यादा काम: आवाज़ कम/ज़्यादा, साइलेंट/वाइब्रेट, Wi-Fi/ब्लूटूथ/ब्राइटनेस सेटिंग, बैटरी, रिमाइंडर, नोट कॉपी, UPI ऐप खोलना, सेल्फ़ी, नेविगेशन, तुरंत हिसाब, कोई भी ऐप नाम से (हिंदी नाम/ग़लत स्पेलिंग भी) और एक वाक्य में कई काम (‘सोनू को कॉल करो और फिर YouTube खोलो’)। 🌐 हर भाषा: भाषा अपने-आप पहचानकर उसी में जवाब, उसी भाषा में सुनना और बोलना। ⚡ तेज़: मुफ़्त AI समानांतर, कनेक्शन पहले से तैयार, जवाब वाक्य-दर-वाक्य। 👂 बेहतर सुनना: बोलते-बोलते शब्द दिखते हैं, आदेश पूरा होते ही तुरंत जवाब, ‘मित्र’ ग़लती से कम जागता है। 🔒 कम अनुमतियाँ, नई प्राइवेसी पॉलिसी। Signed with the same key, installs as an update."
           files: Mitra.apk

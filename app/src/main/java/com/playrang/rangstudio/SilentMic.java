@@ -79,9 +79,59 @@ final class SilentMic {
         i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
         i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, maxResults);
         if (!offlineRefused) i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
-        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
+        // v4.0: end of speech tuned shorter (was 2.0 s / 1.5 s) so the answer starts sooner; Mitra also stops
+        // early by itself when the live partial text is already a complete phone command (see EarlyStop).
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1300L);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
+        i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 600L);
+        if (!"hi-IN".equals(lang)) i.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", new String[]{"hi-IN", "en-IN"});
+        else i.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", new String[]{"en-IN"});
         return i;
+    }
+
+    /**
+     * Stops listening early when the live (partial) text is already a complete phone command and has not changed
+     * for {@link #STABLE_MS}: "टॉर्च जलाओ" runs ~1 s sooner instead of waiting for the recognizer's silence timeout.
+     */
+    static final class EarlyStop {
+        static final long STABLE_MS = 650;
+        private final Handler h = new Handler(Looper.getMainLooper());
+        private String last = "";
+        private Runnable pending;
+
+        void onPartial(final String text, final Runnable stop) {
+            if (text == null) return;
+            final String t = text.trim();
+            if (t.equals(last)) return;
+            last = t;
+            if (pending != null) h.removeCallbacks(pending);
+            pending = null;
+            if (t.split("\\s+").length < 2) return;
+            final boolean cmd;
+            try { cmd = quick(CommandParser.parseAll(t)); } catch (Exception e) { return; }
+            if (!cmd) return;
+            pending = () -> { if (t.equals(last)) stop.run(); };
+            h.postDelayed(pending, STABLE_MS);
+        }
+
+        /** Only short, self-contained commands; never a message, note, reminder or number that may still be dictated. */
+        static boolean quick(java.util.List<CommandParser.Cmd> cs) {
+            if (cs.isEmpty()) return false;
+            for (CommandParser.Cmd c : cs) {
+                switch (c.type) {
+                    case "torch": case "volume": case "ringer": case "settings": case "battery": case "time": case "date":
+                    case "camera": case "open_app": case "youtube": case "call_contact": case "upi": case "dial_open": break;
+                    default: return false;
+                }
+            }
+            return true;
+        }
+
+        void reset() {
+            if (pending != null) h.removeCallbacks(pending);
+            pending = null;
+            last = "";
+        }
     }
 
     /** @return true when this error means "offline language pack missing": caller should retry once (now online). */

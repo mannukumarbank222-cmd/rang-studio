@@ -38,7 +38,10 @@ final class WakeWord {
             "जी", "ji", "जरा", "ज़रा", "zara", "please", "प्लीज", "प्लीज़", "भाई", "bhai", "yaar", "यार", "सुनो", "suno", "सुनिए", "suniye", "हाँ", "हां"));
 
     /** Detection thresholds for the three sensitivity levels (index 0 = less, 1 = normal, 2 = more). */
-    static final double[] THRESHOLD = {0.92, 0.75, 0.55};
+    static final double[] THRESHOLD = {0.92, 0.75, 0.62};
+
+    /** Above this grammar confidence the full decoder does not have to agree (it sometimes drops a short word). */
+    static final double SURE = 0.93;
 
     static double threshold(int sensitivity) {
         return THRESHOLD[Math.max(0, Math.min(2, sensitivity))];
@@ -77,6 +80,10 @@ final class WakeWord {
                     // one long real word swallowed the match ("पितृपक्ष") or the full decoder heard a look-alike word
                     if (c.start - f.start > 0.25 || f.end - c.end > 0.25) { ok = false; break; }
                     if (CONFUSABLE.contains(f.w) && c.conf < 0.95) { ok = false; break; }
+                    // v4.0 false-trigger guard: the full decoder heard a different real word in the same place
+                    double ov = Math.min(f.end, c.end) - Math.max(f.start, c.start);
+                    double len = Math.max(0.05, c.end - c.start);
+                    if (!isWake(f.w) && !PREFIX.contains(f.w.toLowerCase(Locale.ROOT)) && ov / len > 0.6 && c.conf < SURE) { ok = false; break; }
                     continue;
                 }
                 // the wake word must start a phrase: no other speech right before it (except "हे"/"hey")

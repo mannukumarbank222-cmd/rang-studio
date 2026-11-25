@@ -64,7 +64,28 @@ final class LiveTools {
                 boolean off = on.equals("false") || on.equals("off") || on.equals("0") || on.equals("बंद");
                 return new Act("torch", off ? "off" : "on", "", false);
             }
-            case "open_camera": return new Act("camera", "", "", true);
+            case "open_camera": {
+                String f = g(args, "front", "selfie").toLowerCase(java.util.Locale.ROOT);
+                return new Act("camera", f.equals("true") || f.equals("1") || f.equals("yes") ? "front" : "", "", true);
+            }
+            case "set_volume": {
+                String d = g(args, "direction", "level", "action").toLowerCase(java.util.Locale.ROOT);
+                if (!d.matches("up|down|mute|unmute|max")) d = d.contains("down") || d.contains("low") || d.contains("कम") ? "down"
+                        : d.contains("mute") || d.contains("off") ? "mute" : d.contains("max") || d.contains("full") ? "max" : "up";
+                return new Act("volume", d, "", false);
+            }
+            case "phone_ringer": {
+                String m = g(args, "mode").toLowerCase(java.util.Locale.ROOT);
+                return new Act("ringer", m.startsWith("vib") ? "vibrate" : m.startsWith("norm") || m.equals("on") || m.equals("ring") ? "normal" : "silent", "", false);
+            }
+            case "open_settings": return new Act("settings", g(args, "page", "setting", "name"), g(args, "state", "direction"), true);
+            case "set_reminder": {
+                String what = g(args, "text", "title", "message"), when = g(args, "when", "time", "datetime");
+                return new Act("reminder", what, when, true);
+            }
+            case "copy_to_clipboard": return new Act("copy", g(args, "text", "note"), "", false);
+            case "open_upi_app": return new Act("upi", "", "", true);
+            case "navigate": return new Act("navigate", g(args, "place", "destination", "query"), "", true);
             case "share_text": return new Act("share", g(args, "text", "message"), "", true);
             default: return null;
         }
@@ -110,10 +131,27 @@ final class LiveTools {
                 new String[][]{{"place", "STRING", "Place or address"}}, "place"));
         a.put(fn("torch", "Turn the phone's flashlight on or off.", blocking,
                 new String[][]{{"on", "BOOLEAN", "true to switch on, false to switch off"}}, "on"));
-        a.put(fn("open_camera", "Open the camera to take a photo.", blocking, none));
+        a.put(fn("open_camera", "Open the camera to take a photo (front = selfie camera).", blocking,
+                new String[][]{{"front", "BOOLEAN", "true for the selfie (front) camera"}}));
         a.put(fn("share_text", "Share some text through any app (the user picks the app).", blocking,
                 new String[][]{{"text", "STRING", "Text to share"}}, "text"));
         a.put(fn("current_time", "Get the phone's current local time and date.", blocking, none));
+        a.put(fn("battery_status", "Get the phone's battery percentage and whether it is charging.", blocking, none));
+        a.put(fn("set_volume", "Change the phone's media volume.", blocking,
+                new String[][]{{"direction", "STRING", "One of: up, down, mute, unmute, max"}}, "direction"));
+        a.put(fn("phone_ringer", "Put the phone on silent, vibrate or normal ring.", blocking,
+                new String[][]{{"mode", "STRING", "One of: silent, vibrate, normal"}}, "mode"));
+        a.put(fn("open_settings", "Open a phone settings screen (apps cannot switch these themselves; the user flips the switch).", blocking,
+                new String[][]{{"page", "STRING", "One of: wifi, bluetooth, display (brightness), location, airplane, data, hotspot, battery, sound, apps, storage, language, notifications, security"},
+                        {"state", "STRING", "What the user wants: on, off, up, down (optional)"}}, "page"));
+        a.put(fn("set_reminder", "Create a reminder (calendar event with an alert) the user confirms with Save.", blocking,
+                new String[][]{{"text", "STRING", "What to remind about, in the user's words"},
+                        {"when", "STRING", "When, as the user said it, e.g. 'कल सुबह 9 बजे', '10 minute baad', 'tomorrow 5 pm'"}}, "text"));
+        a.put(fn("copy_to_clipboard", "Note something down by copying the text to the clipboard (user can paste it anywhere).", blocking,
+                new String[][]{{"text", "STRING", "Text to copy"}}, "text"));
+        a.put(fn("open_upi_app", "Open the user's UPI payment app (PhonePe / Google Pay / Paytm / BHIM). Never makes a payment itself.", blocking, none));
+        a.put(fn("navigate", "Start turn-by-turn navigation to a place in Maps.", blocking,
+                new String[][]{{"place", "STRING", "Destination"}}, "place"));
         return a;
     }
 }
