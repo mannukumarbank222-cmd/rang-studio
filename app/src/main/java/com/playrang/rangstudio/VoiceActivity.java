@@ -107,74 +107,99 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.BOTTOM);
+        root.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         root.setBackgroundColor(Color.parseColor("#99000000"));
+        root.setFitsSystemWindows(true); // card never slides under the navigation / status bar
         root.setOnClickListener(v -> finish());
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
+        // Bottom sheet card; width-capped so it doesn't stretch across a tablet / landscape screen
+        LinearLayout card = new Ui.MaxWidthColumn(this, 560);
         card.setBackground(Ui.round(Ui.BG, dp(24)));
-        card.setPadding(dp(18), dp(16), dp(18), dp(18));
+        card.setPadding(dp(16), dp(12), dp(8), dp(16));
         card.setClickable(true);
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         ImageView av = new ImageView(this);
         av.setImageResource(R.mipmap.ic_launcher_round);
+        av.setContentDescription("मित्र");
         top.addView(av, new LinearLayout.LayoutParams(dp(40), dp(40)));
         status = new TextView(this);
         status.setTextSize(18);
         status.setTypeface(Typeface.DEFAULT_BOLD);
         status.setTextColor(Ui.SAFFRON_DARK);
-        status.setPadding(dp(12), 0, 0, 0);
+        status.setPadding(dp(12), 0, dp(4), 0);
+        status.setMaxLines(2);
+        status.setEllipsize(android.text.TextUtils.TruncateAt.END);
         top.addView(status, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         TextView close = new TextView(this);
         close.setText("✕");
-        close.setTextSize(22);
-        close.setPadding(dp(12), dp(4), dp(4), dp(4));
+        close.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 22);
+        close.setGravity(Gravity.CENTER);
         close.setTextColor(Ui.MUTED);
+        close.setBackground(Ui.ripple(null, 0x22000000));
+        Ui.touch(close);
         close.setContentDescription("बंद करें");
         close.setOnClickListener(v -> finish());
-        top.addView(close);
-        card.addView(top);
+        top.addView(close, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        card.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         heard = new TextView(this);
         heard.setTextSize(15);
         heard.setTextColor(Ui.MUTED);
-        heard.setPadding(0, dp(10), 0, 0);
+        heard.setPadding(0, dp(8), dp(8), 0);
+        heard.setMaxLines(3);
+        heard.setEllipsize(android.text.TextUtils.TruncateAt.START);
         card.addView(heard);
 
-        ScrollView sv = new ScrollView(this);
+        // Answer + choices scroll inside a box that never takes more than ~45% of the screen,
+        // so the buttons below always stay visible (small phones, landscape, large font).
+        ScrollView sv = new ScrollView(this) {
+            @Override
+            protected void onMeasure(int w, int h) {
+                int max = (int) (getResources().getDisplayMetrics().heightPixels * 0.45f);
+                int size = MeasureSpec.getSize(h);
+                if (MeasureSpec.getMode(h) == MeasureSpec.UNSPECIFIED || size > max) h = MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST);
+                super.onMeasure(w, h);
+            }
+        };
+        sv.setPadding(0, 0, dp(8), 0);
+        sv.setClipToPadding(false);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
         answer = new TextView(this);
         answer.setTextSize(18);
         answer.setTextColor(Ui.TEXT);
         answer.setLineSpacing(dp(2), 1f);
         answer.setPadding(0, dp(8), 0, dp(8));
-        sv.addView(answer);
-        card.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
+        content.addView(answer);
         choiceBox = new LinearLayout(this);
         choiceBox.setOrientation(LinearLayout.VERTICAL);
-        card.addView(choiceBox);
+        content.addView(choiceBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        sv.addView(content, new android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        card.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(0, dp(10), 0, 0);
+        row.setPadding(0, dp(10), dp(8), 0);
         micBtn = pill("🎤 बोलिए", true);
+        micBtn.setContentDescription("बोलिए");
         micBtn.setOnClickListener(v -> { if (listening) stopListening(); else { if (tts != null) tts.stop(); backoff.reset(); listen(8000); } });
         TextView chat = pill("💬 चैट खोलें", false);
         chat.setOnClickListener(v -> {
             startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             finish();
         });
-        row.addView(micBtn);
-        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        // two equal buttons that share the row, so they fit any width / font size
+        row.addView(micBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         gap.leftMargin = dp(12);
         row.addView(chat, gap);
-        card.addView(row);
+        card.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cl.setMargins(dp(10), 0, dp(10), dp(16));
+        cl.setMargins(dp(10), 0, dp(10), dp(12));
+        cl.gravity = Gravity.CENTER_HORIZONTAL;
         root.addView(card, cl);
         setContentView(root);
     }
@@ -184,9 +209,13 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
         v.setText(t);
         v.setTextSize(16);
         v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setGravity(Gravity.CENTER);
         v.setTextColor(primary ? Color.WHITE : Ui.SAFFRON_DARK);
-        v.setBackground(primary ? Ui.round(Ui.SAFFRON, dp(22)) : Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(22)));
-        v.setPadding(dp(18), dp(10), dp(18), dp(10));
+        v.setBackground(Ui.ripple(primary ? Ui.round(Ui.SAFFRON, dp(24)) : Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(24)),
+                primary ? 0x55FFFFFF : 0x33F26A1B));
+        v.setPadding(dp(14), dp(8), dp(14), dp(8));
+        v.setMinHeight(dp(48));
+        v.setClickable(true);
         return v;
     }
 
@@ -208,8 +237,9 @@ public class VoiceActivity extends Activity implements ActionHandler.Host {
             for (int i = 0; i < labels.size(); i++) {
                 final int idx = i;
                 TextView o = pill((labels.size() > 1 ? (i + 1) + ".  " : "") + labels.get(i), false);
+                o.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
                 o.setOnClickListener(v -> { choiceBox.removeAllViews(); stopListening(); actions.choose(generation, idx); });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
                 lp.topMargin = dp(6);
                 choiceBox.addView(o, lp);
             }

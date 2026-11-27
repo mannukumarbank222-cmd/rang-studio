@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
@@ -48,18 +49,30 @@ public class WakeSetupActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setBackground(Ui.gradient(Ui.SAFFRON_LIGHT, Ui.SAFFRON_DARK));
-        header.setPadding(dp(6), dp(12), dp(14), dp(12));
+        header.setPadding(dp(4), dp(4), dp(16), dp(4));
+        header.setMinimumHeight(dp(56));
+        header.setElevation(dp(4));
         TextView back = text("←", 24, Color.WHITE, false);
-        back.setPadding(dp(10), 0, dp(14), 0);
+        back.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 24);
+        back.setGravity(Gravity.CENTER);
+        back.setBackground(Ui.ripple(null, 0x40FFFFFF));
+        Ui.touch(back);
+        back.setContentDescription("वापस");
         back.setOnClickListener(v -> finish());
-        header.addView(back);
-        header.addView(text("हमेशा सुनें — सेटअप", 19, Color.WHITE, true));
-        root.addView(header);
+        header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView title = text("हमेशा सुनें — सेटअप", 19, Color.WHITE, true);
+        title.setPadding(dp(8), 0, 0, 0);
+        Ui.oneLine(title);
+        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         ScrollView sv = new ScrollView(this);
-        body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
+        sv.setFillViewport(true);
+        sv.setClipToPadding(false);
+        body = new Ui.MaxWidthColumn(this);
         body.setPadding(dp(16), dp(16), dp(16), dp(24));
-        sv.addView(body);
+        android.widget.FrameLayout.LayoutParams blp = new android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.gravity = Gravity.CENTER_HORIZONTAL;
+        sv.addView(body, blp);
         root.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
@@ -74,6 +87,7 @@ public class WakeSetupActivity extends Activity {
         toggle.setTypeface(Typeface.DEFAULT_BOLD);
         toggle.setTextColor(Ui.TEXT);
         toggle.setPadding(0, dp(10), 0, dp(4));
+        toggle.setMinHeight(dp(48));
         toggle.setChecked(WakeService.enabled(this));
         toggle.setOnCheckedChangeListener((bt, on) -> { if (on) enable(); else disable(); });
         c0.addView(toggle);
@@ -90,7 +104,9 @@ public class WakeSetupActivity extends Activity {
         c2.addView(modelState);
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setMax(100);
-        c2.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(14)));
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(14));
+        barLp.topMargin = dp(6);
+        c2.addView(bar, barLp);
         c2.addView(button("⬇️ मॉडल डाउनलोड करें", this::downloadModel));
 
         LinearLayout c3 = card();
@@ -108,8 +124,10 @@ public class WakeSetupActivity extends Activity {
         overlayState = text("", 13.5f, Ui.MUTED, false);
         c4.addView(overlayState);
         c4.addView(button("🪟 दूसरे ऐप्स के ऊपर दिखाएँ", this::overlay));
-        c4.addView(text("💡 टिप: Recents (हाल के ऐप्स) में मित्र को नीचे खींचकर / देर तक दबाकर 🔒 लॉक करें, ताकि ‘सब साफ़ करें’ से बंद न हो।",
-                13.5f, Ui.TEXT, false));
+        TextView tip = text("💡 टिप: Recents (हाल के ऐप्स) में मित्र को नीचे खींचकर / देर तक दबाकर 🔒 लॉक करें, ताकि ‘सब साफ़ करें’ से बंद न हो।",
+                13.5f, Ui.TEXT, false);
+        tip.setPadding(0, dp(10), 0, 0);
+        c4.addView(tip);
 
         LinearLayout c5 = card();
         c5.addView(text("संवेदनशीलता", 16, Ui.TEXT, true));
@@ -120,16 +138,20 @@ public class WakeSetupActivity extends Activity {
         for (int i = 0; i < 3; i++) {
             final int idx = i;
             TextView o = text(names[i], 15, Ui.SAFFRON_DARK, true);
-            o.setPadding(dp(16), dp(8), dp(16), dp(8));
+            o.setPadding(dp(12), dp(8), dp(12), dp(8));
+            o.setGravity(Gravity.CENTER);
+            o.setMinHeight(dp(48));
+            Ui.oneLine(o);
             o.setOnClickListener(v -> { prefs.edit().putInt("wake_sens", idx).apply(); paintSens(opts); });
             opts.add(o);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(8);
+            // equal-width options: always fit the card, even on a narrow phone with a big font
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            if (i < 2) lp.rightMargin = dp(8);
             lp.topMargin = dp(8);
             row.addView(o, lp);
         }
         paintSens(opts);
-        c5.addView(row);
+        c5.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         if (getIntent().getBooleanExtra("enable", false) && !WakeService.enabled(this)) toggle.setChecked(true);
     }
@@ -308,8 +330,10 @@ public class WakeSetupActivity extends Activity {
 
     private TextView button(String s, Runnable r) {
         TextView t = text(s, 15, Ui.SAFFRON_DARK, true);
-        t.setBackground(Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(20)));
-        t.setPadding(dp(16), dp(10), dp(16), dp(10));
+        t.setBackground(Ui.ripple(Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(24)), 0x33F26A1B));
+        t.setPadding(dp(16), dp(8), dp(16), dp(8));
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setMinHeight(dp(48));
         t.setOnClickListener(v -> r.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(10);

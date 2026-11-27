@@ -120,11 +120,12 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0F0B09"));
+        root.setFitsSystemWindows(true); // nothing hides behind the status / navigation bar
+        final boolean compact = Ui.shortScreen(this);
 
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout col = new Ui.MaxWidthColumn(this, 600); // width-capped on tablets
         col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding(dp(20), dp(28), dp(20), dp(28));
+        col.setPadding(dp(20), dp(compact ? 12 : 24), dp(20), dp(compact ? 12 : 24));
 
         TextView title = new TextView(this);
         title.setText("मित्र • Live");
@@ -132,6 +133,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         title.setTextSize(18);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER);
+        Ui.oneLine(title);
         col.addView(title);
 
         chip = new TextView(this);
@@ -141,6 +143,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         chip.setPadding(dp(12), dp(4), dp(12), dp(4));
         chip.setBackground(Ui.round(Color.parseColor("#221A15"), dp(12)));
         chip.setText("जुड़ रहा हूँ…");
+        chip.setMaxLines(2);
+        chip.setEllipsize(android.text.TextUtils.TruncateAt.END);
         chip.setOnClickListener(v -> { if (!live) startActivity(new Intent(this, SettingsActivity.class)); });
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.topMargin = dp(8);
@@ -156,6 +160,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         status.setTypeface(Typeface.DEFAULT_BOLD);
         status.setGravity(Gravity.CENTER);
         status.setText("जुड़ रहा हूँ…");
+        status.setMaxLines(2);
+        status.setEllipsize(android.text.TextUtils.TruncateAt.END);
         col.addView(status);
 
         heard = new TextView(this);
@@ -171,7 +177,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         reply.setTextColor(Color.parseColor("#F5E6D8"));
         reply.setTextSize(17);
         reply.setGravity(Gravity.CENTER);
-        reply.setMaxLines(4);
+        reply.setMaxLines(compact ? 3 : 4);
         reply.setEllipsize(android.text.TextUtils.TruncateAt.START);
         reply.setLineSpacing(dp(2), 1f);
         reply.setPadding(0, dp(6), 0, dp(6));
@@ -186,7 +192,7 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
 
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER);
-        row.setPadding(0, dp(18), 0, 0);
+        row.setPadding(0, dp(compact ? 10 : 18), 0, 0);
         muteBtn = circle("🎤", Color.parseColor("#2A211C"));
         muteBtn.setContentDescription("माइक बंद/चालू");
         muteBtn.setOnClickListener(v -> toggleMute());
@@ -199,7 +205,9 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
         row.addView(close, gap);
         col.addView(row);
 
-        root.addView(col, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams colLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER_HORIZONTAL);
+        root.addView(col, colLp);
         setContentView(root);
         if (Build.VERSION.SDK_INT >= 21) getWindow().setStatusBarColor(Color.parseColor("#0F0B09"));
         if (Build.VERSION.SDK_INT >= 21) getWindow().setNavigationBarColor(Color.parseColor("#0F0B09"));
@@ -208,8 +216,10 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
     private TextView circle(String t, int bg) {
         TextView v = new TextView(this);
         v.setText(t);
-        v.setTextSize(24);
+        v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 24); // icon glyph: fixed size so it fits the 68dp circle
         v.setTextColor(Color.WHITE);
+        v.setIncludeFontPadding(false);
+        v.setClickable(true);
         v.setGravity(Gravity.CENTER);
         v.setBackground(Ui.round(bg, dp(34)));
         return v;
@@ -233,6 +243,8 @@ public class LiveActivity extends Activity implements ActionHandler.Host, LiveSe
             o.setTextColor(Color.WHITE);
             o.setTextSize(15);
             o.setPadding(dp(14), dp(8), dp(14), dp(8));
+            o.setGravity(Gravity.CENTER);
+            o.setMinHeight(dp(48));
             o.setBackground(Ui.stroke(Color.parseColor("#2A211C"), Ui.SAFFRON, dp(1), dp(18)));
             o.setOnClickListener(v -> { choiceBox.removeAllViews(); actions.choose(generation, idx); });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);

@@ -9,6 +9,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -52,29 +53,37 @@ public class SettingsActivity extends Activity {
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setBackground(Ui.gradient(Ui.SAFFRON_LIGHT, Ui.SAFFRON_DARK));
-        header.setPadding(dp(6), dp(12), dp(14), dp(12));
+        header.setPadding(dp(4), dp(4), dp(16), dp(4));
+        header.setMinimumHeight(dp(56));
         header.setElevation(dp(4));
         TextView back = new TextView(this);
         back.setText("←");
-        back.setTextSize(24);
+        back.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 24);
         back.setTextColor(Color.WHITE);
-        back.setPadding(dp(10), 0, dp(14), 0);
+        back.setGravity(Gravity.CENTER);
+        back.setBackground(Ui.ripple(null, 0x40FFFFFF));
+        Ui.touch(back);
         back.setContentDescription("वापस");
         back.setOnClickListener(v -> finish());
-        header.addView(back);
+        header.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
         TextView title = new TextView(this);
         title.setText("सेटिंग्स और जानकारी");
         title.setTextSize(19);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(Color.WHITE);
-        header.addView(title);
-        root.addView(header);
+        title.setPadding(dp(8), 0, 0, 0);
+        Ui.oneLine(title);
+        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         ScrollView sv = new ScrollView(this);
-        body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
+        sv.setFillViewport(true);
+        sv.setClipToPadding(false);
+        body = new Ui.MaxWidthColumn(this);
         body.setPadding(dp(16), dp(16), dp(16), dp(24));
-        sv.addView(body);
+        android.widget.FrameLayout.LayoutParams blp = new android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.gravity = Gravity.CENTER_HORIZONTAL;
+        sv.addView(body, blp);
         root.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
@@ -87,7 +96,7 @@ public class SettingsActivity extends Activity {
         TextView name = text("मित्र (Mitra)", 22, Ui.TEXT, true);
         name.setGravity(Gravity.CENTER);
         about.addView(name);
-        String ver = "4.0";
+        String ver = "4.1";
         try {
             PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
             ver = pi.versionName + " (" + pi.versionCode + ")";
@@ -139,6 +148,7 @@ public class SettingsActivity extends Activity {
         speak.setText("जवाब बोलकर सुनाएँ");
         speak.setTextSize(15);
         speak.setTextColor(Ui.TEXT);
+        speak.setMinHeight(dp(48));
         speak.setChecked(!prefs.getBoolean("muted", false));
         speak.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> prefs.edit().putBoolean("muted", !on).apply());
         speak.setPadding(0, dp(8), 0, dp(4));
@@ -163,6 +173,8 @@ public class SettingsActivity extends Activity {
         key.setTextSize(15);
         key.setBackground(Ui.stroke(Color.WHITE, Color.parseColor("#E8D9CC"), dp(1), dp(10)));
         key.setPadding(dp(12), dp(10), dp(12), dp(10));
+        key.setMinHeight(dp(48));
+        key.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         LinearLayout.LayoutParams kl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         kl.topMargin = dp(10);
         ai.addView(key, kl);
@@ -181,11 +193,11 @@ public class SettingsActivity extends Activity {
             prefs.edit().remove("gemini_key").apply();
             Toast.makeText(this, "Key हटा दी, मुफ़्त AI इस्तेमाल होगा", Toast.LENGTH_SHORT).show();
         });
-        btns.addView(save);
-        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        btns.addView(save, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         gap.leftMargin = dp(10);
         btns.addView(remove, gap);
-        ai.addView(btns);
+        ai.addView(btns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         TextView getKey = link("मुफ़्त Gemini key पाएँ: aistudio.google.com");
         getKey.setOnClickListener(x -> open("https://aistudio.google.com/apikey"));
         ai.addView(getKey);
@@ -204,6 +216,7 @@ public class SettingsActivity extends Activity {
             rb.setText(voices[vi][1]);
             rb.setTextColor(Ui.TEXT);
             rb.setTextSize(14);
+            rb.setMinHeight(dp(48));
             if (voices[vi][0].equals(curVoice)) rb.setChecked(true);
             vg.addView(rb);
         }
@@ -222,6 +235,7 @@ public class SettingsActivity extends Activity {
         wakeSwitch.setText("हमेशा सुनें");
         wakeSwitch.setTextSize(15);
         wakeSwitch.setTextColor(Ui.TEXT);
+        wakeSwitch.setMinHeight(dp(48));
         wakeSwitch.setPadding(0, dp(8), 0, dp(4));
         wakeSwitch.setChecked(WakeService.enabled(this));
         wakeSwitch.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> {
@@ -243,6 +257,7 @@ public class SettingsActivity extends Activity {
         screenOff.setText("स्क्रीन बंद पर भी सुनें");
         screenOff.setTextSize(15);
         screenOff.setTextColor(Ui.TEXT);
+        screenOff.setMinHeight(dp(48));
         screenOff.setPadding(0, dp(8), 0, dp(2));
         screenOff.setChecked(prefs.getBoolean(WakeService.PREF_SCREEN_OFF, false));
         screenOff.setOnCheckedChangeListener((CompoundButton bt, boolean on) -> {
@@ -255,8 +270,9 @@ public class SettingsActivity extends Activity {
         setup.setOnClickListener(x -> startActivity(new Intent(this, WakeSetupActivity.class)));
         LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         wl.topMargin = dp(8);
+        wl.bottomMargin = dp(8);
         wake.addView(setup, wl);
-        wake.addView(text("बातचीत मोड: चैट में ऊपर 📞 दबाएँ — फ़ोन कॉल की तरह लगातार बात कीजिए, बंद करने के लिए “बस” बोलें।", 13f, Ui.MUTED, false));
+        wake.addView(text("बातचीत मोड और 🎙️ Live बात: चैट में ऊपर ⋮ मेनू दबाएँ — फ़ोन कॉल की तरह लगातार बात कीजिए, बंद करने के लिए “बस” बोलें।", 13f, Ui.MUTED, false));
 
         // Chat
         LinearLayout chat = card();
@@ -324,7 +340,11 @@ public class SettingsActivity extends Activity {
 
     private TextView link(String s) {
         TextView t = text(s, 14, Ui.SAFFRON_DARK, false);
-        t.setPadding(0, dp(10), 0, dp(2));
+        t.setPadding(0, dp(8), 0, dp(8));
+        t.setMinHeight(dp(48));
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setPaintFlags(t.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        t.setBackground(Ui.ripple(null, 0x22F26A1B));
         t.setClickable(true);
         return t;
     }
@@ -332,8 +352,10 @@ public class SettingsActivity extends Activity {
     private TextView button(String s, boolean primary) {
         TextView t = text(s, 15, primary ? Color.WHITE : Ui.SAFFRON_DARK, true);
         t.setGravity(Gravity.CENTER);
-        t.setBackground(primary ? Ui.round(Ui.SAFFRON, dp(20)) : Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(20)));
-        t.setPadding(dp(18), dp(9), dp(18), dp(9));
+        t.setBackground(Ui.ripple(primary ? Ui.round(Ui.SAFFRON, dp(24)) : Ui.stroke(Color.WHITE, Ui.SAFFRON, dp(1), dp(24)),
+                primary ? 0x55FFFFFF : 0x33F26A1B));
+        t.setPadding(dp(18), dp(8), dp(18), dp(8));
+        t.setMinHeight(dp(48));
         t.setClickable(true);
         return t;
     }

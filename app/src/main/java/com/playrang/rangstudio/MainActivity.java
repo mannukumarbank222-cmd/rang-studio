@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Build;
@@ -21,8 +22,10 @@ import android.speech.tts.UtteranceProgressListener;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.Menu;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -32,6 +35,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -47,8 +51,10 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity implements ActionHandler.Host {
 
     static final String GREETING = "नमस्ते, मैं मित्र हूँ, आपका मित्र। आप मुझसे कोई भी सवाल पूछ सकते हैं और कुछ भी काम करा सकते हैं।";
-    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "कल सुबह 7 बजे याद दिलाना कि दवा लेनी है", "मुझे एक चुटकुला सुनाओ",
-            "टॉर्च जलाओ और आवाज़ बढ़ाओ", "सुबह 6 बजे का अलार्म लगाओ", "बैटरी कितनी है?", "WhatsApp खोलो", "पढ़ाई में मन कैसे लगाएं?", "250 का 18 प्रतिशत कितना है"};
+    // v4.1: fewer, shorter suggestions so the home screen stays clean on small phones
+    static final String[] CHIPS = {"YouTube पर भजन चलाओ", "किसी को कॉल करो", "सुबह 6 बजे का अलार्म लगाओ", "मुझे एक चुटकुला सुनाओ", "बैटरी कितनी है?"};
+    private static final int MENU_LIVE = 1, MENU_CONV = 2, MENU_MUTE = 3, MENU_WAKE = 4, MENU_SETTINGS = 5;
+    private static final String BUBBLE_TAG = "bubble";
     private static final int REQ_MIC = 7;
     static final String EXTRA_START_WAKE = "start_wake";
 
@@ -60,6 +66,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private EditText input;
     private TextView micBtn, sendBtn, muteBtn, statusText, convBtn;
     private HorizontalScrollView chipBar;
+    private boolean chipsUsed;
 
     private TextToSpeech tts;
     private boolean ttsReady;
@@ -133,7 +140,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 .setTitle("हमेशा सुनें चालू करें?")
                 .setMessage("फ़ोन लॉक हो या स्क्रीन बंद, बस “मित्र” बोलिए और सवाल पूछिए या काम कहिए — जैसे “मित्र, सोनू को कॉल करो”।\n\n"
                         + "‘मित्र’ शब्द फ़ोन पर ही पहचाना जाता है, आवाज़ रिकॉर्ड या अपलोड नहीं होती। इसमें बैटरी थोड़ी ज़्यादा लगेगी और एक नोटिफ़िकेशन दिखेगा। "
-                        + "बाद में ⚙️ सेटिंग्स से कभी भी बदल सकते हैं।")
+                        + "बाद में ऊपर ⋮ मेनू › सेटिंग्स से कभी भी बदल सकते हैं।")
                 .setPositiveButton("हाँ, चालू करें", (d, w) -> startActivity(new Intent(this, WakeSetupActivity.class).putExtra("enable", true)))
                 .setNegativeButton("अभी नहीं", null)
                 .show();
@@ -146,80 +153,72 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Ui.BG);
-        root.setFitsSystemWindows(true);
+        root.setFitsSystemWindows(true); // keeps header / input bar clear of the status bar, nav bar and keyboard (adjustResize)
 
-        // Header
+        // Header: avatar, name + status, and ONE overflow menu (⋮) for everything secondary.
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setBackground(Ui.gradient(Ui.SAFFRON_LIGHT, Ui.SAFFRON_DARK));
-        header.setPadding(dp(14), dp(10), dp(8), dp(10));
+        header.setPadding(dp(12), dp(4), dp(4), dp(4));
+        header.setMinimumHeight(dp(56));
         header.setElevation(dp(4));
 
         ImageView avatar = new ImageView(this);
         avatar.setImageResource(R.mipmap.ic_launcher_round);
+        avatar.setContentDescription("मित्र");
         FrameLayout avWrap = new FrameLayout(this);
-        avWrap.setBackground(Ui.round(Color.WHITE, dp(22)));
+        avWrap.setBackground(Ui.round(Color.WHITE, dp(20)));
         avWrap.setPadding(dp(2), dp(2), dp(2), dp(2));
-        avWrap.addView(avatar, new FrameLayout.LayoutParams(dp(38), dp(38)));
-        header.addView(avWrap, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        avWrap.addView(avatar, new FrameLayout.LayoutParams(dp(36), dp(36)));
+        header.addView(avWrap, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
-        titles.setPadding(dp(12), 0, 0, 0);
+        titles.setPadding(dp(10), 0, dp(4), 0);
         TextView title = new TextView(this);
         title.setText("मित्र");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(21);
+        title.setTextSize(19);
         title.setTypeface(Typeface.DEFAULT_BOLD);
+        Ui.oneLine(title);
         statusText = new TextView(this);
         statusText.setText(lang().online);
         statusText.setTextColor(Color.parseColor("#FFF3E8"));
         statusText.setTextSize(12);
+        Ui.oneLine(statusText);
         titles.addView(title);
         titles.addView(statusText);
         header.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        convBtn = headerIcon("📞");
-        convBtn.setContentDescription("बातचीत मोड");
+        // Shown only while it matters: stop conversation mode / unmute. Otherwise the header stays clean.
+        convBtn = headerIcon("⏹️");
+        convBtn.setContentDescription("बातचीत मोड बंद करें");
         convBtn.setOnClickListener(v -> { if (convMode) endConversation(true); else startConversation(); });
-        header.addView(convBtn);
-        muteBtn = headerIcon(isMuted() ? "🔇" : "🔊");
-        muteBtn.setContentDescription("आवाज़ चालू/बंद");
+        convBtn.setVisibility(View.GONE);
+        header.addView(convBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        muteBtn = headerIcon("🔇");
+        muteBtn.setContentDescription("आवाज़ चालू करें");
         muteBtn.setOnClickListener(v -> toggleMute());
-        header.addView(muteBtn);
-        TextView settings = headerIcon("⚙️");
-        settings.setContentDescription("सेटिंग्स");
-        settings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        header.addView(settings);
+        header.addView(muteBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView more = headerIcon("⋮");
+        more.setTextColor(Color.WHITE);
+        more.setTypeface(Typeface.DEFAULT_BOLD);
+        more.setContentDescription("और विकल्प: Live बात, बातचीत मोड, आवाज़, हमेशा सुनें, सेटिंग्स");
+        more.setOnClickListener(this::showMenu);
+        header.addView(more, new LinearLayout.LayoutParams(dp(48), dp(48)));
         root.addView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        updateHeader();
 
-        // Prominent "Live बात" entry (ChatGPT-style voice conversation)
-        TextView liveBtn = new TextView(this);
-        liveBtn.setText("🎙️  Live बात — बोलिए, मित्र तुरंत जवाब देगा");
-        liveBtn.setTextColor(Color.WHITE);
-        liveBtn.setTextSize(16);
-        liveBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        liveBtn.setGravity(Gravity.CENTER);
-        liveBtn.setPadding(dp(16), dp(12), dp(16), dp(12));
-        liveBtn.setElevation(dp(2));
-        liveBtn.setContentDescription("Live बात शुरू करें");
-        liveBtn.setOnClickListener(v -> openLive());
-        LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        llp.setMargins(dp(10), dp(8), dp(10), 0);
-        liveBtn.setBackground(Ui.round(Color.parseColor("#2B2118"), dp(26)));
-        root.addView(liveBtn, llp);
-
-        // Chat list
+        // Chat list (the main area). Centred and width-capped on tablets / landscape.
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
-        chat = new LinearLayout(this);
-        chat.setOrientation(LinearLayout.VERTICAL);
-        chat.setPadding(dp(10), dp(12), dp(10), dp(12));
+        chat = new Ui.MaxWidthColumn(this, 720);
+        chat.setPadding(dp(12), dp(10), dp(12), dp(10));
         TextView day = new TextView(this);
         day.setText("आज • " + LocalInfo.todayText());
-        day.setTextSize(11.5f);
+        day.setTextSize(12);
         day.setTextColor(Ui.MUTED);
         day.setGravity(Gravity.CENTER);
         day.setBackground(Ui.round(Color.parseColor("#FBE6D4"), dp(10)));
@@ -228,50 +227,58 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         dlp.gravity = Gravity.CENTER_HORIZONTAL;
         dlp.bottomMargin = dp(8);
         chat.addView(day, dlp);
-        scroll.addView(chat);
+        FrameLayout.LayoutParams chatLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        chatLp.gravity = Gravity.CENTER_HORIZONTAL;
+        scroll.addView(chat, chatLp);
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // Suggestion chips
+        // A few short suggestions in one scrollable row (hidden after the first message and on short screens)
         chipBar = new HorizontalScrollView(this);
         chipBar.setHorizontalScrollBarEnabled(false);
+        chipBar.setClipToPadding(false);
         LinearLayout chips = new LinearLayout(this);
         chips.setOrientation(LinearLayout.HORIZONTAL);
-        chips.setPadding(dp(8), dp(4), dp(8), dp(6));
+        chips.setGravity(Gravity.CENTER_VERTICAL);
+        chips.setPadding(dp(12), dp(2), dp(12), dp(4));
         for (final String c : CHIPS) {
             TextView chip = new TextView(this);
             chip.setText(c);
-            chip.setTextSize(13.5f);
+            chip.setTextSize(14);
             chip.setTextColor(Ui.SAFFRON_DARK);
-            chip.setBackground(Ui.stroke(Ui.CHIP_BG, Color.parseColor("#FFC79A"), dp(1), dp(18)));
-            chip.setPadding(dp(14), dp(8), dp(14), dp(8));
+            chip.setGravity(Gravity.CENTER);
+            Ui.oneLine(chip);
+            chip.setBackground(Ui.ripple(Ui.stroke(Ui.CHIP_BG, Color.parseColor("#FFC79A"), dp(1), dp(20)), 0x33F26A1B));
+            chip.setPadding(dp(14), 0, dp(14), 0);
+            chip.setMinHeight(dp(40));
             chip.setOnClickListener(v -> submit(c));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48));
             lp.rightMargin = dp(8);
             chips.addView(chip, lp);
         }
         chipBar.addView(chips);
-        root.addView(chipBar);
+        root.addView(chipBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Input bar
+        // Compact input bar: text field + one big primary button (🎤 talk to Mitra, turns into ➤ send while typing)
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(Color.WHITE);
         bar.setElevation(dp(8));
-        bar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         input = new EditText(this);
         input.setHint(lang().hint);
-        input.setHintTextColor(Color.parseColor("#B3A396"));
+        input.setHintTextColor(Color.parseColor("#9C8B7E"));
         input.setTextColor(Ui.TEXT);
         input.setTextSize(16);
-        input.setMaxLines(4);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setHorizontallyScrolling(false);
-        input.setMaxLines(4);
-        input.setImeOptions(EditorInfo.IME_ACTION_SEND);
+        input.setMaxLines(Ui.shortScreen(this) ? 2 : 4);
+        input.setMinHeight(dp(48));
+        input.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        input.setImeOptions(EditorInfo.IME_ACTION_SEND | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         input.setBackground(Ui.round(Color.parseColor("#F5EEE8"), dp(24)));
-        input.setPadding(dp(16), dp(10), dp(16), dp(10));
+        input.setPadding(dp(16), dp(8), dp(16), dp(8));
         input.setOnEditorActionListener((v, id, ev) -> {
             if (id == EditorInfo.IME_ACTION_SEND || (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER)) { sendTyped(); return true; }
             return false;
@@ -289,34 +296,90 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         micBtn = roundButton("🎤");
         micBtn.setContentDescription("बोलकर पूछें");
         micBtn.setOnClickListener(v -> { if (listening) stopListening(); else startListening(); });
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(52), dp(52));
         blp.leftMargin = dp(8);
         bar.addView(sendBtn, blp);
         bar.addView(micBtn, new LinearLayout.LayoutParams(blp));
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         setContentView(root);
+        applyScreenSize();
         updateButtons();
+    }
+
+    /** The single overflow menu: every secondary feature lives here instead of crowding the home screen. */
+    private void showMenu(View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        Menu m = pm.getMenu();
+        m.add(0, MENU_LIVE, 0, "🎙️  Live बात (आवाज़ में बात)");
+        m.add(0, MENU_CONV, 1, convMode ? "⏹️  बातचीत मोड बंद करें" : "📞  बातचीत मोड (लगातार बात)");
+        m.add(0, MENU_MUTE, 2, isMuted() ? "🔊  जवाब बोलकर सुनाएँ" : "🔇  आवाज़ बंद करें");
+        m.add(0, MENU_WAKE, 3, "👂  हमेशा सुनें (‘मित्र’ बोलकर जगाएँ)");
+        m.add(0, MENU_SETTINGS, 4, "⚙️  सेटिंग्स और जानकारी");
+        pm.setOnMenuItemClickListener(item -> {
+            switch (item.getItemId()) {
+                case MENU_LIVE: openLive(); return true;
+                case MENU_CONV: if (convMode) endConversation(true); else startConversation(); return true;
+                case MENU_MUTE: toggleMute(); return true;
+                case MENU_WAKE: startActivity(new Intent(this, WakeSetupActivity.class)); return true;
+                case MENU_SETTINGS: startActivity(new Intent(this, SettingsActivity.class)); return true;
+                default: return false;
+            }
+        });
+        pm.show();
+    }
+
+    /** Header shows the stop-conversation / unmute shortcuts only while they are relevant. */
+    private void updateHeader() {
+        if (convBtn != null) convBtn.setVisibility(convMode ? View.VISIBLE : View.GONE);
+        if (muteBtn != null) muteBtn.setVisibility(isMuted() ? View.VISIBLE : View.GONE);
+    }
+
+    /** Re-fits the layout when the window size changes (rotation, split-screen, font size) without recreating it. */
+    private void applyScreenSize() {
+        if (chipBar != null) chipBar.setVisibility(chipsUsed || Ui.shortScreen(this) ? View.GONE : View.VISIBLE);
+        if (input != null) input.setMaxLines(Ui.shortScreen(this) ? 2 : 4);
+        if (chat == null) return;
+        int maxW = Ui.bubbleMaxWidth(this);
+        for (int i = 0; i < chat.getChildCount(); i++) {
+            View row = chat.getChildAt(i);
+            if (!(row instanceof ViewGroup)) continue;
+            View box = ((ViewGroup) row).getChildCount() > 0 ? ((ViewGroup) row).getChildAt(0) : null;
+            if (box instanceof ViewGroup && ((ViewGroup) box).getChildCount() > 0 && ((ViewGroup) box).getChildAt(0) instanceof TextView
+                    && BUBBLE_TAG.equals(((ViewGroup) box).getChildAt(0).getTag())) {
+                ((TextView) ((ViewGroup) box).getChildAt(0)).setMaxWidth(maxW);
+            }
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        applyScreenSize();
+        scrollDown();
     }
 
     private TextView headerIcon(String t) {
         TextView v = new TextView(this);
         v.setText(t);
-        v.setTextSize(21);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 22); // icon glyph: fixed size so it always fits its 48dp button
         v.setGravity(Gravity.CENTER);
-        v.setPadding(dp(10), dp(6), dp(10), dp(6));
-        v.setClickable(true);
+        v.setIncludeFontPadding(false);
+        v.setBackground(Ui.ripple(null, 0x40FFFFFF));
+        Ui.touch(v);
         return v;
     }
 
     private TextView roundButton(String t) {
         TextView v = new TextView(this);
         v.setText(t);
-        v.setTextSize(20);
+        v.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 22); // icon glyph: fixed size so it never overflows the circle
         v.setTextColor(Color.WHITE);
         v.setGravity(Gravity.CENTER);
-        v.setBackground(Ui.round(Ui.SAFFRON, dp(24)));
+        v.setIncludeFontPadding(false);
+        v.setBackground(Ui.ripple(Ui.round(Ui.SAFFRON, dp(26)), 0x55FFFFFF));
         v.setElevation(dp(2));
+        Ui.touch(v);
         return v;
     }
 
@@ -324,8 +387,9 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         boolean hasText = input.getText().toString().trim().length() > 0;
         sendBtn.setVisibility(hasText && !listening ? View.VISIBLE : View.GONE);
         micBtn.setVisibility(hasText && !listening ? View.GONE : View.VISIBLE);
-        micBtn.setBackground(Ui.round(listening ? Color.parseColor("#E53935") : Ui.SAFFRON, dp(24)));
+        micBtn.setBackground(Ui.ripple(Ui.round(listening ? Color.parseColor("#E53935") : Ui.SAFFRON, dp(26)), 0x55FFFFFF));
         micBtn.setText(listening ? "■" : "🎤");
+        micBtn.setContentDescription(listening ? "सुनना बंद करें" : "बोलकर पूछें");
     }
 
     private String now() { return new SimpleDateFormat("h:mm a", Locale.ENGLISH).format(new Date()); }
@@ -346,7 +410,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         tv.setTextSize(16);
         tv.setLineSpacing(dp(2), 1f);
         tv.setTextColor(mine ? Color.WHITE : Ui.TEXT);
-        tv.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.78f));
+        tv.setMaxWidth(Ui.bubbleMaxWidth(this));
+        tv.setTag(BUBBLE_TAG);
         box.addView(tv);
 
         TextView ts = new TextView(this);
@@ -366,7 +431,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (!mine) box.setOnClickListener(v -> speakForce(tv.getText().toString()));
 
         LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        if (mine) bl.leftMargin = dp(40); else bl.rightMargin = dp(40);
+        if (mine) bl.leftMargin = dp(32); else bl.rightMargin = dp(32);
         row.addView(box, bl);
         LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         rl.topMargin = dp(4);
@@ -403,7 +468,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             speak(question);
             final LinearLayout box = new LinearLayout(this);
             box.setOrientation(LinearLayout.VERTICAL);
-            box.setPadding(dp(4), 0, dp(40), dp(4));
+            box.setPadding(dp(4), 0, dp(32), dp(4));
             final boolean[] done = {false};
             for (int i = 0; i < labels.size(); i++) {
                 final int idx = i;
@@ -411,8 +476,10 @@ public class MainActivity extends Activity implements ActionHandler.Host {
                 opt.setText((labels.size() > 1 ? (i + 1) + ".  " : "") + labels.get(i));
                 opt.setTextSize(15);
                 opt.setTextColor(Ui.SAFFRON_DARK);
-                opt.setBackground(Ui.stroke(Ui.CHIP_BG, Color.parseColor("#FFC79A"), dp(1), dp(16)));
+                opt.setBackground(Ui.ripple(Ui.stroke(Ui.CHIP_BG, Color.parseColor("#FFC79A"), dp(1), dp(16)), 0x33F26A1B));
                 opt.setPadding(dp(14), dp(10), dp(14), dp(10));
+                opt.setGravity(Gravity.CENTER_VERTICAL);
+                opt.setMinHeight(dp(48));
                 opt.setOnClickListener(v -> {
                     if (done[0]) return;
                     addBubble(labels.get(idx), true);
@@ -449,6 +516,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         lastUserText = text;
         String learned = Lang.learn(autoSr(), text);
         if (learned != null && !learned.equals(autoSr())) prefs.edit().putString("auto_sr", learned).apply();
+        chipsUsed = true;
         chipBar.setVisibility(View.GONE);
         if (convMode && Convo.isStop(text)) { endConversation(false); return; }
         try {
@@ -567,7 +635,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
     private void toggleMute() {
         boolean m = !isMuted();
         prefs.edit().putBoolean("muted", m).apply();
-        muteBtn.setText(m ? "🔇" : "🔊");
+        updateHeader();
         if (m && tts != null) tts.stop();
         Toast.makeText(this, m ? "आवाज़ बंद" : "आवाज़ चालू", Toast.LENGTH_SHORT).show();
     }
@@ -622,17 +690,15 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         convMode = true;
         convBackoff.reset();
         WakeService.pause(this, "ui", 0);
-        convBtn.setText("⏹️");
-        convBtn.setBackground(Ui.round(Color.parseColor("#33FFFFFF"), dp(20)));
-        Toast.makeText(this, "बातचीत मोड चालू — बोलते रहिए। रोकने के लिए “बस” बोलें या ⏹️ दबाएँ।", Toast.LENGTH_LONG).show();
+        updateHeader();
+        Toast.makeText(this, "बातचीत मोड चालू — बोलते रहिए। रोकने के लिए “बस” बोलें या ऊपर ⏹️ दबाएँ।", Toast.LENGTH_LONG).show();
         addBot("📞 बातचीत मोड चालू — फ़ोन कॉल की तरह बात कीजिए। बंद करने के लिए “बस” या “बंद करो” बोलिए।");
         speakForce("बातचीत मोड चालू। बोलिए।");
     }
 
     private void endConversation(boolean silent) {
         convMode = false;
-        convBtn.setText("📞");
-        convBtn.setBackground(null);
+        updateHeader();
         if (listening) stopListening();
         WakeService.resume(this, "ui");
         if (!silent) { addBot("ठीक है, बातचीत बंद। जब चाहें फिर बुलाइए 🙏"); speakForce("ठीक है, बातचीत बंद।"); }
@@ -665,7 +731,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         if (missing) {
             if (ttsWarned.add(want)) {
                 Toast.makeText(this, "इस भाषा (" + want + ") की आवाज़ फ़ोन में नहीं मिली — Google Text-to-speech ऐप में यह भाषा की voice "
-                        + "डाउनलोड करें (⚙️ सेटिंग्स › आवाज़)। अभी हिंदी आवाज़ में सुना रहा हूँ।", Toast.LENGTH_LONG).show();
+                        + "डाउनलोड करें (⋮ मेनू › सेटिंग्स › आवाज़)। अभी हिंदी आवाज़ में सुना रहा हूँ।", Toast.LENGTH_LONG).show();
             }
             r = tts.setLanguage(new Locale("hi", "IN"));
             if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -763,7 +829,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             if (SilentMic.retryOnline(error)) { main.postDelayed(MainActivity.this::startListening, 300); return; }
             if (convMode && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
                 long d = convBackoff.onEmpty();
-                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
+                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। ⋮ मेनू › 📞 बातचीत मोड से फिर शुरू करें।"); }
                 else main.postDelayed(MainActivity.this::convListen, d);
                 return;
             }
@@ -793,7 +859,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             if (r != null && !r.isEmpty() && r.get(0).trim().length() > 0) { convBackoff.reset(); submit(r.get(0).trim()); }
             else if (convMode) {
                 long d = convBackoff.onEmpty();
-                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। 📞 दबाकर फिर शुरू करें।"); }
+                if (d == ListenBackoff.STOP) { endConversation(true); addBot("कोई आवाज़ नहीं आई, बातचीत मोड बंद कर दिया। ⋮ मेनू › 📞 बातचीत मोड से फिर शुरू करें।"); }
                 else main.postDelayed(MainActivity.this::convListen, d);
             }
         }
@@ -827,7 +893,7 @@ public class MainActivity extends Activity implements ActionHandler.Host {
         resumed = true;
         if (convMode) WakeService.pause(this, "ui", 0);
         if (convMode && !busy && !listening && (tts == null || !tts.isSpeaking())) main.postDelayed(this::convListen, 600);
-        if (muteBtn != null) muteBtn.setText(isMuted() ? "🔇" : "🔊");
+        updateHeader();
         actions.resumeQueue(); // multi-step: continue after a call / another app
         if (input != null && !listening) { input.setHint(lang().hint); statusText.setText(lang().online); }
         ttsLocale = null;
@@ -837,7 +903,8 @@ public class MainActivity extends Activity implements ActionHandler.Host {
             actions.reset();
             ActionHandler.clearQueue();
             while (chat.getChildCount() > 1) chat.removeViewAt(1);
-            chipBar.setVisibility(View.VISIBLE);
+            chipsUsed = false;
+            applyScreenSize();
             addBot(lang().greeting);
         }
     }

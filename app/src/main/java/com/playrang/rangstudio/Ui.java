@@ -1,9 +1,17 @@
 package com.playrang.rangstudio;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.text.TextUtils;
 import android.util.TypedValue;
+import android.view.View;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 /** Small helpers for building native views in code. */
 final class Ui {
@@ -48,5 +56,73 @@ final class Ui {
         GradientDrawable g = round(fill, r);
         g.setStroke(strokePx, strokeColor);
         return g;
+    }
+
+    /** Minimum touch target (Material / Android accessibility guideline). */
+    static final int TOUCH_DP = 48;
+
+    /** Content never stretches wider than this on tablets / landscape, so lines stay readable. */
+    static final int MAX_CONTENT_DP = 640;
+
+    /** Gives a view at least a 48dp x 48dp touch area. */
+    static <T extends View> T touch(T v) {
+        int m = dp(v.getContext(), TOUCH_DP);
+        v.setMinimumHeight(m);
+        v.setMinimumWidth(m);
+        if (v instanceof TextView) {
+            ((TextView) v).setMinHeight(m);
+            ((TextView) v).setMinWidth(m);
+        }
+        v.setClickable(true);
+        v.setFocusable(true);
+        return v;
+    }
+
+    /** Wraps a background in a ripple so taps give visual feedback. */
+    static Drawable ripple(Drawable content, int rippleColor) {
+        Drawable mask = content != null ? content : new GradientDrawable();
+        if (content == null) ((GradientDrawable) mask).setColor(Color.WHITE);
+        return new RippleDrawable(ColorStateList.valueOf(rippleColor), content, mask);
+    }
+
+    /** Single line with "…" so a long title never pushes buttons off a small screen. */
+    static void oneLine(TextView t) {
+        t.setSingleLine(true);
+        t.setMaxLines(1);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+    }
+
+    /** Max width for a chat bubble: ~80% of the window, capped on tablets / landscape. */
+    static int bubbleMaxWidth(Context c) {
+        int w = c.getResources().getDisplayMetrics().widthPixels;
+        return Math.min((int) (w * 0.80f), dp(c, 520));
+    }
+
+    /** Short screen: landscape phone, split-screen, or a small phone with a big font. */
+    static boolean shortScreen(Context c) {
+        Configuration cf = c.getResources().getConfiguration();
+        return cf.screenHeightDp > 0 && cf.screenHeightDp / Math.max(1f, cf.fontScale) < 480;
+    }
+
+    /** A vertical LinearLayout that never grows wider than {@link #MAX_CONTENT_DP} (centred by its parent). */
+    static class MaxWidthColumn extends LinearLayout {
+        private final int maxW;
+
+        MaxWidthColumn(Context c) { this(c, MAX_CONTENT_DP); }
+
+        MaxWidthColumn(Context c, int maxDp) {
+            super(c);
+            setOrientation(VERTICAL);
+            maxW = dp(c, maxDp);
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            int w = MeasureSpec.getSize(widthSpec);
+            if (MeasureSpec.getMode(widthSpec) != MeasureSpec.UNSPECIFIED && w > maxW) {
+                widthSpec = MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.getMode(widthSpec));
+            }
+            super.onMeasure(widthSpec, heightSpec);
+        }
     }
 }
