@@ -1,11 +1,14 @@
 <resources>
+  <color name="mitra_bg">#FFF7F0</color>
   <style name="MitraTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
     <item name="android:colorPrimary">#F26A1B</item>
     <item name="android:colorPrimaryDark">#E2551A</item>
     <item name="android:colorAccent">#F26A1B</item>
     <item name="android:statusBarColor">#E2551A</item>
-    <item name="android:navigationBarColor">#FFFFFF</item>
-    <item name="android:windowBackground">@android:color/white</item>
+    <!-- dark navigation bar so the (white) system nav buttons are always visible -->
+    <item name="android:navigationBarColor">#2B2118</item>
+    <item name="android:windowBackground">@color/mitra_bg</item>
+    <item name="android:windowSoftInputMode">adjustResize</item>
   </style>
   <style name="MitraVoice" parent="@android:style/Theme.Material.Light.NoActionBar">
     <item name="android:windowIsTranslucent">true</item>
